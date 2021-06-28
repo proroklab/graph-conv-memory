@@ -1,8 +1,6 @@
 import torch
 import itertools
-from ray.rllib.utils.typing import TensorType
 from typing import Dict, Tuple, List
-import numpy as np
 
 
 @torch.jit.script

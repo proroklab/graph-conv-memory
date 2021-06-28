@@ -1,13 +1,13 @@
 import unittest
 import torch
-import gcm
-from gcm import DenseGCM, DenseToSparse, SparseToDense
 import torch_geometric
-from edge_selectors.temporal import TemporalBackedge
-from edge_selectors.distance import EuclideanEdge, CosineEdge, SpatialEdge
-from edge_selectors.dense import DenseEdge
-from edge_selectors.bernoulli import BernoulliEdge, sample_hard
 import torchviz
+
+from gcm.gcm import DenseGCM, DenseToSparse, SparseToDense
+from gcm.edge_selectors.temporal import TemporalBackedge
+from gcm.edge_selectors.distance import EuclideanEdge, CosineEdge, SpatialEdge
+from gcm.edge_selectors.dense import DenseEdge
+from gcm.edge_selectors.bernoulli import BernoulliEdge, sample_hard
 
 
 class TestWrapOverflow(unittest.TestCase):
@@ -374,28 +374,6 @@ class TestSparseGCM(unittest.TestCase):
         if torch.any(nodes[:, 1] != self.obs):
             self.fail(f"{nodes[:,0]} != {self.obs}")
 
-    def test_dense_to_sparse(self):
-        B = self.nodes.shape[0]
-        N = self.nodes.shape[1]
-        dense_batch = torch_geometric.data.Batch(
-            x=self.nodes, adj=self.adj, edge_weight=self.weights, B=B, N=N
-        )
-        sparse_batch = gcm.dense_to_sparse(dense_batch)
-        new_nodes = torch_geometric.utils.to_dense_batch(
-            x=sparse_batch.x, batch=sparse_batch.batch, max_num_nodes=sparse_batch.N
-        )[0]
-        new_adj = torch_geometric.utils.to_dense_adj(
-            edge_index=sparse_batch.edge_index,
-            batch=sparse_batch.batch,
-            max_num_nodes=sparse_batch.N,
-        )[0]
-
-        if torch.any(new_nodes != dense_batch.x):
-            self.fail(f"x: {new_nodes} != {dense_batch.x}")
-
-        if torch.any(new_adj != dense_batch.adj):
-            self.fail(f"adj: {new_adj} != {dense_batch.adj}")
-
     def test_DenseToSparse_SparseToDense(self):
         B = self.nodes.shape[0]
         N = self.nodes.shape[1]
@@ -419,21 +397,6 @@ class TestSparseGCM(unittest.TestCase):
 
         if torch.any(adj_d != self.adj):
             self.fail(f"adj: {adj_d} != {self.adj}")
-
-    def test_dense_to_sparse_sparse_to_dense(self):
-        B = self.nodes.shape[0]
-        N = self.nodes.shape[1]
-        batch = torch_geometric.data.Batch(
-            x=self.nodes, adj=self.adj, edge_weight=self.weights, B=B, N=N
-        )
-        sparse_batch = gcm.dense_to_sparse(batch)
-        dense_batch = gcm.sparse_to_dense(sparse_batch)
-
-        if torch.any(dense_batch.x != batch.x):
-            self.fail(f"x: {dense_batch.x} != {batch.x}")
-
-        if torch.any(dense_batch.adj != batch.adj):
-            self.fail(f"adj: {dense_batch.adj} != {batch.adj}")
 
     def test_propagation(self):
         out, (nodes, adj, weights, num_nodes) = self.s(
