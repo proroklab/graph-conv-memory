@@ -5,17 +5,6 @@ from typing import List, Tuple, Union, Any, Dict, Callable
 import time
 
 
-def sparse_to_dense(batch: Batch) -> Batch:
-    sparse_edges = torch_geometric.utils.to_dense_adj(
-        batch.edge_index, batch=batch.batch, max_num_nodes=batch.N
-    )[0]
-    sparse_nodes = torch_geometric.utils.to_dense_batch(
-        x=batch.x, batch=batch.batch, max_num_nodes=batch.N
-    )[0]
-    dense_batch = Batch(x=sparse_nodes, adj=sparse_edges, N=batch.N, B=batch.B)
-    return dense_batch
-
-
 class SparseToDense(torch.nn.Module):
     """Convert from edge_list to adj. """
 
@@ -61,74 +50,9 @@ class DenseToSparse(torch.nn.Module):
 
         return x, edge_index, batch_idx
 
-
-def dense_to_sparse(batch: Batch) -> Batch:
-    """Convert from adj to edge_list while allow gradients
-    to flow through adj"""
-
-    offset, row, col = torch.nonzero(batch.adj > 0).t()
-    # edge_weight = batch.weight[offset, row, col].float()
-    row += offset * batch.N
-    col += offset * batch.N
-    edge_index = torch.stack([row, col], dim=0).long()
-    x = batch.x.view(batch.B * batch.N, batch.x.shape[-1])
-    batch_idx = (
-        torch.arange(0, batch.B, device=batch.x.device)
-        .view(-1, 1)
-        .repeat(1, batch.N)
-        .view(-1)
-    )
-    sparse_batch = Batch(
-        x=x,
-        edge_index=edge_index,
-        # edge_weight=edge_weight,
-        batch=batch_idx,
-        B=batch.B,
-        N=batch.N,
-    )
-
-    return sparse_batch
-
-
 @torch.jit.script
 def overflow(num_nodes: torch.Tensor, N: int):
     return torch.any(num_nodes + 1 > N)
-
-
-"""
-    def forward(self, batch: Batch):
-        if self.test == "adj":
-            batch.adj = batch.adj * self.grad_test_var
-        elif self.test:
-            batch.x = batch.x * self.grad_test_var
-        if self.sparse:
-            # sparse_batch = self.dense_to_sparse(batch)
-            return self.forward_sparse(batch)
-        else:
-            return self.forward_dense(batch)
-
-    def forward_dense(self, batch: Batch) -> Batch:
-        # Clone here to avoid backprop error
-        output = batch.x.clone()
-        for layer in self.layers:
-            if type(layer) == self.conv_type:
-                # TODO: Multiply edge weights
-                output = layer(output, adj=batch.adj)
-            else:
-                output = layer(output)
-        return output
-
-    def forward_sparse(self, batch: Batch) -> Batch:
-        output = batch.x.clone()
-        for layer in self.layers:
-            if type(layer) == self.conv_type:
-                output = layer(output, edge_index=batch.edge_index)
-            else:
-                output = layer(output)
-        return torch_geometric.utils.to_dense_batch(
-            output, batch=batch.batch, max_num_nodes=batch.N
-        )[0]
-"""
 
 
 class DenseGCM(torch.nn.Module):

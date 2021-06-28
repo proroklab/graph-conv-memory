@@ -1,2 +1,1 @@
-from .gcm import gcm
-from .gcm import edge_selectors
+from .gcm.gcm import DenseGCM

@@ -1,38 +1,63 @@
 # Graph Convolution Memory for Reinforcement Learning
 
 ## Description
-Graph convolutional memory (GCM) is graph-structured memory that may be applied to reinforcement learning to solve POMDPs, replacing LSTMs or attention mechanisms.
+Graph convolutional memory (GCM) is graph-structured memory that may be applied to reinforcement learning to solve POMDPs, replacing LSTMs or attention mechanisms. GCM allows you to embed your domain knowledge in the form of connections in a knowledge graph. See the full paper for further details.
+
+
+## Installation
+`gcm` is installed using `pip`. The dependencies must be installed manually, as they target your specific architecture (with or without CUDA).
+
+### Conda install
+First install `torch >= 1.8.0` and `torch-geometric` dependencies, then `gcm`
+```
+conda install torch
+conda install pytorch-geometric -c rusty1s -c conda-forge
+pip install gcm
+```
+
+### Pip install
+Please follow the [torch-geometric install guide](https://pytorch-geometric.readthedocs.io/en/latest/notes/installation.html), then
+```
+pip install gcm
+```
+
 
 ## Quickstart
-If you are interested in apply GCM for your problem, you must install dependencies `torch` and `torch_geometric`. You may `pip install gcm` to install the most recent versions of gcm, torch, and torch_geometric. However, if you want to use CUDA or other accelerators we suggest you install torch_geometric by hand before running `pip install gcm`, specifying your current CUDA version. Below is a quick example of how to use GCM in a basic RL problem:
+Below is a quick example of how to use GCM in a basic RL problem:
 
 ```
 import torch
 import torch_geometric
-from gcm import DenseGCM
+from gcm.gcm import DenseGCM
 from gcm.edge_selectors.temporal import TemporalBackedge
 
 
+# Define the GNN used in GCM. The following is the one used in the paper
+# Make sure you define the first layer to match your observation space
+obs_size = 8
 our_gnn = torch_geometric.nn.Sequential(
     "x, adj, weights, B, N",
     [
-        (torch_geometric.nn.DenseGraphConv(YOUR_OBS_SIZE, 32), "x, adj -> x"),
+        (torch_geometric.nn.DenseGraphConv(obs_size, 32), "x, adj -> x"),
         (torch.nn.Tanh()),
         (torch_geometric.nn.DenseGraphConv(32, 32), "x, adj -> x"),
         (torch.nn.Tanh()),
     ],
 )
+# graph_size denotes the maximum number of observations in the graph, after which
+# the oldest observations will be overwritten
 gcm = DenseGCM(our_gnn, edge_selectors=TemporalBackedge([1]), graph_size=128)
 
 # Create initial state
 edges = torch.zeros(
     (1, 128, 128), dtype=torch.float
 )
-nodes = torch.zeros((1, 128, YOUR_OBS_SIZE))
+nodes = torch.zeros((1, 128, obs_size))
 weights = torch.zeros(
     (1, 128, 128), dtype=torch.float
 )
 num_nodes = torch.tensor([0], dtype=torch.long)
+# Our memory state
 m_t = [nodes, edges, weights, num_nodes]
 
 for t in train_timestep:
@@ -42,4 +67,4 @@ for t in train_timestep:
    action_logits = logits(state)
    state_value = vf(state)
 ```
-See `gcm.edge_selectors` for different kinds of priors.
+See `gcm.edge_selectors` for different kinds of priors suitable to your specific problem. Do not be afraid to implement your own!
