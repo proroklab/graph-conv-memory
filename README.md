@@ -48,7 +48,9 @@ our_gnn = torch_geometric.nn.Sequential(
         (torch.nn.Tanh()),
     ],
 )
-gcm = DenseGCM(our_gnn, edge_selectors=TemporalBackedge([1]), graph_size=128)
+# Create the GCM using our GNN and edge selection criteria. TemporalBackedge([1]) will link observation o_t to o_{t-1}.
+# See `gcm.edge_selectors` for different kinds of priors suitable for your specific problem. Do not be afraid to implement your own!
+gcm = DenseGCM(our_gnn, edge_selectors=TemporalBackedge([1]), graph_size=graph_size)
 
 # Create initial state
 # Shape: (batch_size, graph_size, graph_size)
@@ -74,4 +76,3 @@ for t in train_timestep:
    action_logits = logits_nn(belief)
    state_value = vf_nn(belief)
 ```
-See `gcm.edge_selectors` for different kinds of priors suitable to your specific problem. Do not be afraid to implement your own!
