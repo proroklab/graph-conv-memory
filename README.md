@@ -8,7 +8,7 @@ Graph convolutional memory (GCM) is graph-structured memory that may be applied 
 GCM is installed using `pip`. The dependencies must be installed manually, as they target your specific architecture (with or without CUDA).
 
 ### Conda install
-First install `torch >= 1.8.0` and `torch-geometric` dependencies, then `gcm`
+First install `torch >= 1.8.0` and `torch-geometric` dependencies, then `gcm`:
 ```
 conda install torch
 conda install pytorch-geometric -c rusty1s -c conda-forge
