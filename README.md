@@ -1,7 +1,7 @@
 # Graph Convolution Memory for Reinforcement Learning
 
 ## Description
-Graph convolutional memory (GCM) is graph-structured memory that may be applied to reinforcement learning to solve POMDPs, replacing LSTMs or attention mechanisms. GCM allows you to embed your domain knowledge in the form of connections in a knowledge graph. See the full paper for further details.
+Graph convolutional memory (GCM) is graph-structured memory that may be applied to reinforcement learning to solve POMDPs, replacing LSTMs or attention mechanisms. GCM allows you to embed your domain knowledge in the form of connections in a knowledge graph. See the [full paper](https://arxiv.org/pdf/2106.14117.pdf) for further details.
 
 
 ## Installation
