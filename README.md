@@ -32,7 +32,7 @@ from gcm.gcm import DenseGCM
 from gcm.edge_selectors.temporal import TemporalBackedge
 
 
-# Maximum number of nodes in the graph. Reduce this to reduce memory usage. Note that GCM will only
+# Maximum number of nodes in the graph. Reduce this to reduce memory usage. Note that GCM will
 # forget observations older than this
 graph_size = 128
 # Define the GNN used in GCM. The following is the one used in the paper
