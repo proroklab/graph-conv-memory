@@ -32,8 +32,8 @@ from gcm.gcm import DenseGCM
 from gcm.edge_selectors.temporal import TemporalBackedge
 
 
-# Maximum number of nodes in the graph. Reduce this to reduce memory usage. Note that GCM will
-# forget observations older than this
+# graph_size denotes the maximum number of observations in the graph, after which
+# the oldest observations will be overwritten with newer observations
 graph_size = 128
 # Define the GNN used in GCM. The following is the one used in the paper
 # Make sure you define the first layer to match your observation space
@@ -47,8 +47,6 @@ our_gnn = torch_geometric.nn.Sequential(
         (torch.nn.Tanh()),
     ],
 )
-# graph_size denotes the maximum number of observations in the graph, after which
-# the oldest observations will be overwritten
 gcm = DenseGCM(our_gnn, edge_selectors=TemporalBackedge([1]), graph_size=128)
 
 # Create initial state
