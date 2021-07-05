@@ -49,22 +49,27 @@ our_gnn = torch_geometric.nn.Sequential(
 gcm = DenseGCM(our_gnn, edge_selectors=TemporalBackedge([1]), graph_size=128)
 
 # Create initial state
+# Shape: (batch_size, graph_size, graph_size)
 edges = torch.zeros(
     (1, 128, 128), dtype=torch.float
 )
+# Shape: (batch_size, graph_size, obs_size)
 nodes = torch.zeros((1, 128, obs_size))
+# Shape: (batch_size, graph_size, graph_size)
 weights = torch.zeros(
     (1, 128, 128), dtype=torch.float
 )
+# Shape: (batch_size)
 num_nodes = torch.tensor([0], dtype=torch.long)
-# Our memory state
+# Our memory state (m_t in the paper)
 m_t = [nodes, edges, weights, num_nodes]
 
 for t in train_timestep:
-   state, m_t = gcm(obs[t], m_t)
-   # Do what you will with the state
-   # likely you want to use it to get action/value estimate
-   action_logits = logits(state)
-   state_value = vf(state)
+   belief, m_t = gcm(obs[t], m_t)
+   # GCM provides a belief state -- a combination of all past observational data relevant to the problem
+   # What you likely want to do is put this state through actor and critic networks to obtain
+   # action and value estimates
+   action_logits = logits_nn(belief)
+   state_value = vf_nn(belief)
 ```
 See `gcm.edge_selectors` for different kinds of priors suitable to your specific problem. Do not be afraid to implement your own!
