@@ -32,6 +32,9 @@ from gcm.gcm import DenseGCM
 from gcm.edge_selectors.temporal import TemporalBackedge
 
 
+# Maximum number of nodes in the graph. Reduce this to reduce memory usage. Note that GCM will only
+# forget observations older than this
+graph_size = 128
 # Define the GNN used in GCM. The following is the one used in the paper
 # Make sure you define the first layer to match your observation space
 obs_size = 8
@@ -51,13 +54,13 @@ gcm = DenseGCM(our_gnn, edge_selectors=TemporalBackedge([1]), graph_size=128)
 # Create initial state
 # Shape: (batch_size, graph_size, graph_size)
 edges = torch.zeros(
-    (1, 128, 128), dtype=torch.float
+    (1, graph_size, graph_size), dtype=torch.float
 )
 # Shape: (batch_size, graph_size, obs_size)
-nodes = torch.zeros((1, 128, obs_size))
+nodes = torch.zeros((1, graph_size, obs_size))
 # Shape: (batch_size, graph_size, graph_size)
 weights = torch.zeros(
-    (1, 128, 128), dtype=torch.float
+    (1, graph_size, graph_size), dtype=torch.float
 )
 # Shape: (batch_size)
 num_nodes = torch.tensor([0], dtype=torch.long)
