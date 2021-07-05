@@ -33,7 +33,8 @@ from gcm.edge_selectors.temporal import TemporalBackedge
 
 
 # graph_size denotes the maximum number of observations in the graph, after which
-# the oldest observations will be overwritten with newer observations
+# the oldest observations will be overwritten with newer observations. Reduce this number to
+# reduce memory usage.
 graph_size = 128
 # Define the GNN used in GCM. The following is the one used in the paper
 # Make sure you define the first layer to match your observation space
