@@ -69,6 +69,7 @@ num_nodes = torch.tensor([0], dtype=torch.long)
 m_t = [nodes, edges, weights, num_nodes]
 
 for t in train_timestep:
+   # Obs at timestep t should be of shape (batch_size, obs_size)
    belief, m_t = gcm(obs[t], m_t)
    # GCM provides a belief state -- a combination of all past observational data relevant to the problem
    # What you likely want to do is put this state through actor and critic networks to obtain
