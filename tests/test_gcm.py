@@ -75,6 +75,38 @@ class TestWrapOverflow(unittest.TestCase):
         if not torch.all(nodes[1, -1] == desired_nodes[1, -1]):
             self.fail(f"{nodes[0]} != {desired_nodes[0]}")
 
+    def test_wrap_overflow_no_weights(self):
+        self.weights = None
+        self.adj[:, 0, :] = 1
+        self.adj[:, :, 0] = 1
+        self.nodes[:, 0] = 0
+
+        desired = torch.zeros_like(self.adj)
+        desired[0, 0, :] = 1
+        desired[0, :, 0] = 1
+        desired_nodes = self.nodes.clone()
+        desired_nodes[0, 1] = 5
+        desired_nodes[1, -1] = 5
+        desired_nodes[1, 0] = torch.arange(8 * 5, 9 * 5)
+        _, (nodes, adj, weights, num_nodes) = self.s(
+            self.obs, (self.nodes, self.adj, self.weights, self.num_nodes)
+        )
+        if not torch.all(adj == desired):
+            self.fail(f"{adj} != {desired}")
+
+        if not torch.all(nodes[0] == desired_nodes[0]):
+            self.fail(f"{nodes[0]} != {desired_nodes[0]}")
+
+        # It's shifted by one
+        if not torch.all(nodes[1, 1] == desired_nodes[1, 2]):
+            self.fail(f"{nodes[1,2]} != {desired_nodes[1,1]}")
+
+        if not torch.all(nodes[1, 0] == desired_nodes[1, 0]):
+            self.fail(f"{nodes[1,0]} != {desired_nodes[1,0]}")
+
+        if not torch.all(nodes[1, -1] == desired_nodes[1, -1]):
+            self.fail(f"{nodes[0]} != {desired_nodes[0]}")
+
 
 class TestGCMDirection(unittest.TestCase):
     def setUp(self):
@@ -255,6 +287,14 @@ class TestDenseGCM(unittest.TestCase):
         dot = torchviz.make_dot(loss, params=dict(self.s.named_parameters()))
         # Make sure gradients make it all the way thru node_feats
         self.assertTrue("grad_test_var" in dot.source)
+
+    def test_no_weights(self):
+        _, (nodes, adj, weights, num_nodes) = self.s(
+            self.obs, (self.nodes, self.adj, None, self.num_nodes)
+        )
+
+        if weights is not None:
+            self.fail(f"Weights should be none, is {weights}") 
 
     def test_zeroth_entry(self):
         # Ensure first obs ends up in nodes matrix

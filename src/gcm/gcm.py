@@ -87,7 +87,7 @@ class DenseGCM(torch.nn.Module):
             hidden: (
                 nodes: [B,N,feats]
                 adj: [B,N,N]
-                weights: [B,N,N]
+                weights: [B,N,N] or None
                 number_of_nodes_in_graph: [B]
             )
         Outputs:
@@ -95,7 +95,7 @@ class DenseGCM(torch.nn.Module):
             hidden: (
                 nodes: [B,N,feats]
                 adj: [B,N,N]
-                weights: [B,N,N]
+                weights: [B,N,N] or None
                 number_of_nodes_in_graph: [B]
             )
         """
@@ -105,7 +105,7 @@ class DenseGCM(torch.nn.Module):
         assert nodes.dtype == torch.float
         # if self.gnn.sparse:
         #    assert adj.dtype == torch.long
-        assert weights.dtype == torch.float
+        assert weights is None or weights.dtype == torch.float
         assert num_nodes.dtype == torch.long
         assert num_nodes.dim() == 1
 
@@ -170,21 +170,22 @@ class DenseGCM(torch.nn.Module):
         overflowing_batches = overflow_mask.nonzero().squeeze()
         nodes = nodes.clone()
         adj = adj.clone()
-        weights = weights.clone()
         # Zero entries before shifting
         nodes[overflowing_batches, 0] = 0
         adj[overflowing_batches, 0, :] = 0
         adj[overflowing_batches, :, 0] = 0
-        weights[overflowing_batches, 0, :] = 0
-        weights[overflowing_batches, :, 0] = 0
         # Roll newly zeroed zeroth entry to final entry
         nodes[overflowing_batches] = torch.roll(nodes[overflowing_batches], -1, -2)
         adj[overflowing_batches] = torch.roll(
             adj[overflowing_batches], (-1, -1), (-1, -2)
         )
-        weights[overflowing_batches] = torch.roll(
-            weights[overflowing_batches], (-1, -1), (-1, -2)
-        )
+        if weights is not None:
+            weights = weights.clone()
+            weights[overflowing_batches, 0, :] = 0
+            weights[overflowing_batches, :, 0] = 0
+            weights[overflowing_batches] = torch.roll(
+                weights[overflowing_batches], (-1, -1), (-1, -2)
+            )
 
         num_nodes[overflow_mask] = num_nodes[overflow_mask] - 1
         return nodes, adj, weights, num_nodes
