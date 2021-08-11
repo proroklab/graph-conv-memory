@@ -1,13 +1,84 @@
 import unittest
+import math
 import torch
 import torch_geometric
 import torchviz
 
-from gcm.gcm import DenseGCM, DenseToSparse, SparseToDense
+from gcm.gcm import DenseGCM, DenseToSparse, SparseToDense, PositionalEncoding1D
 from gcm.edge_selectors.temporal import TemporalBackedge
 from gcm.edge_selectors.distance import EuclideanEdge, CosineEdge, SpatialEdge
 from gcm.edge_selectors.dense import DenseEdge
 from gcm.edge_selectors.bernoulli import BernoulliEdge, sample_hard
+
+
+class TestPositionalEncoding(unittest.TestCase):
+    def setUp(self):
+        torch.autograd.set_detect_anomaly(True)
+        feats = 5
+        batches = 2
+        N = 7
+        self.g = torch_geometric.nn.Sequential(
+            "x, adj, weights, B, N",
+            [
+                (lambda x: x, "x -> x"),
+            ],
+        )
+        self.s = DenseGCM(self.g, positional_encoding=True)
+
+        self.nodes = torch.zeros(batches, N, feats)
+        self.obs = torch.ones(batches, feats)
+        self.adj = torch.zeros(batches, N, N)
+        self.weights = torch.ones(batches, N, N)
+        self.num_nodes = torch.tensor([0, 7])
+
+    def test_pos_enc(self):
+        enc = self.s.positional_encoder(self.nodes.clone(), self.num_nodes)
+        if not torch.all(enc[0,1,:] == 0):
+            self.fail("Off by one error in encoder (overflow)")
+
+        if torch.all(enc[0,0,:] == 0):
+            self.fail("Off by one error in encoder (underflow)")
+
+        # PE(x,2i) = sin(x/10000^(2i/D))
+        # PE(x,2i+1) = cos(x/10000^(2i/D))
+        # 
+        # Zeroth row:
+        # PE(x=0,2i=0)   = sin(0/1)             = 0
+        # PE(x=0,2i+1=1) = cos(0/1)             = pi/2
+        # PE(x=0,2i=2)   = sin(0/10000^(2/4))   = 0
+        # PE(x=0,2i+1=3) = cos(0/10000^(2/4)    = pi/2
+        # 
+        # First row:
+        # Note we must have 2i so its /6 instead of /5
+        # PE(x=1,2i=0)   = sin 1/10000^(0/6)
+        # PE(x=1,2i+1=1) = cos 1/10000^(0/6)
+        # PE(x=1,2i=2)   = sin 1/10000^(2/6)
+        # PE(x=1,2i+1=3) = cos 1/10000^(2/6)
+        # PE(x=1,2i=2)   = sin 1/10000^(4/6)
+
+        sin_actual = enc[0,0,::2]
+        sin_desired = torch.zeros_like(enc[0,0,::2])
+        cos_actual = enc[0,0,1::2]
+        cos_desired = torch.ones_like(enc[0,0,1::2]) 
+
+        if torch.abs(sin_actual - sin_desired).sum() > 0.01:
+            self.fail(f"Sine zeroth row desired {sin_desired} actual {sin_actual}")
+        if torch.abs(cos_actual -  cos_desired).sum() > 0.01:
+            self.fail(f"Cosine zeroth row desired {cos_desired} actual {cos_actual}")
+
+        enc = self.s.positional_encoder(self.nodes.clone(), self.num_nodes + 1)
+        desired = torch.tensor(
+            [
+                math.sin( (1/10000)**(0/6)),
+                math.cos( (1/10000)**(0/6)),
+                math.sin( (1/10000)**(2/6)),
+                math.cos( (1/10000)**(2/6)),
+                math.sin((1/10000)**(4/6)),
+            ]
+        )
+
+        if torch.abs(enc[0,1] - desired).sum() > 0.01:
+            self.fail(f"Desired {desired} actual {enc[0,1]}")
 
 
 class TestWrapOverflow(unittest.TestCase):

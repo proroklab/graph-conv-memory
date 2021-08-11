@@ -51,33 +51,57 @@ class DenseToSparse(torch.nn.Module):
 
         return x, edge_index, batch_idx
 
-class PositionalEncoding1D(torch.nn.Module):
-    def __init__(self, channels):
-        """
-        :param channels: The last dimension of the tensor you want to apply pos emb to.
-        """
+
+class PositionalEncoding(torch.nn.Module):
+    """Embed positional encoding into the graph. Ensures we do not
+    encode future nodes (node_idx > num_nodes)"""
+
+    def up_to_num_nodes_idxs(
+        self, nodes: torch.Tensor, num_nodes: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Given num_nodes, returns idxs from adj
+        up to and including num_nodes. I.e.
+        [batches, 0:num_nodes + 1, :]. Note the order is
+        sorted by (batches, num_nodes + 1) in ascending order"""
+        seq_lens = num_nodes.unsqueeze(-1)
+        N = nodes.shape[1]
+        N_idx = torch.arange(N, device=nodes.device).unsqueeze(0)
+        N_idx = N_idx.expand(seq_lens.shape[0], N_idx.shape[1])
+        # include the current node
+        N_idx = torch.nonzero(N_idx <= num_nodes.unsqueeze(1))
+        assert N_idx.shape[-1] == 2
+        batch_idxs = N_idx[:, 0]
+        node_idxs = N_idx[:, 1]
+
+        return batch_idxs, node_idxs
+
+    def __init__(self, max_len: int = 5000):
         super().__init__()
-        self.channels = channels
-        inv_freq = 1. / (10000 ** (torch.arange(0, channels, 2).float() / channels))
-        self.register_buffer('inv_freq', inv_freq)
+        self.max_len = max_len
 
-    def forward(self, tensor):
-        """
-        :param tensor: A 3d tensor of size (batch_size, x, ch)
-        :return: Positional Encoding Matrix of size (batch_size, x, ch)
-        """
-        if len(tensor.shape) != 3:
-            raise RuntimeError("The input tensor has to be 3d!")
-        batch_size, x, orig_ch = tensor.shape
-        # Modified so the counting is from t -> 0 instead of 0 -> t
-        pos_x = torch.arange(x, device=tensor.device).type(self.inv_freq.type())
-        sin_inp_x = torch.einsum("i,j->ij", pos_x, self.inv_freq)
-        emb_x = torch.cat((sin_inp_x.sin(), sin_inp_x.cos()), dim=-1)
-        emb = torch.zeros((x,self.channels),device=tensor.device).type(tensor.type())
-        emb[:,:self.channels] = emb_x
+    def run_once(self, x: torch.Tensor) -> None:
+        # Dim must be even
+        d_model = math.ceil(x.shape[-1] / 2) * 2
+        position = torch.arange(self.max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(self.max_len, d_model, device=x.device)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
 
-        return emb[None,:,:orig_ch].repeat(batch_size, 1, 1)
-    
+    def forward(self, x: torch.Tensor, num_nodes: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Tensor, shape [batch_size, seq_len, embedding_dim]
+            num_nodes: Tensor
+        """
+        if not hasattr(self, "pe"):
+            self.run_once(x)
+        
+        b_idxs, n_idxs = self.up_to_num_nodes_idxs(x, num_nodes)
+        x[b_idxs, n_idxs] = x[b_idxs, n_idxs] + self.pe[n_idxs, :x.shape[-1]]
+        return x
+
 @torch.jit.script
 def overflow(num_nodes: torch.Tensor, N: int):
     return torch.any(num_nodes + 1 > N)
@@ -116,7 +140,7 @@ class DenseGCM(torch.nn.Module):
         self.edge_selectors = edge_selectors
         self.pooled = pooled
         if positional_encoding:
-            self.positional_encoder = PositionalEncoding1D(math.ceil(self.graph_size / 2) * 2)
+            self.positional_encoder = PositionalEncoding(self.graph_size)
         else:
             self.positional_encoder = None
 
@@ -174,6 +198,12 @@ class DenseGCM(torch.nn.Module):
         # Add new nodes to the current graph
         # starting at num_nodes
         nodes[B_idx, num_nodes[B_idx]] = x[B_idx]
+        # We do not want to modify graph nodes in the GCM
+        # Do all mutation operations on dirty_nodes, 
+        # then use clean nodes in the graph state
+        dirty_nodes = nodes.clone()
+        if self.positional_encoder:
+            dirty_nodes = self.positional_encoder(dirty_nodes, num_nodes)
 
         # Do NOT add self edges or they will be counted twice using
         # GraphConv
@@ -184,23 +214,14 @@ class DenseGCM(torch.nn.Module):
         weights = weights.clone()
         if self.edge_selectors:
             adj, weights = self.edge_selectors(
-                nodes, adj, weights, num_nodes, B
+                dirty_nodes, adj, weights, num_nodes, B
             )
 
         # Thru network
         if self.preprocessor:
-            nodes_in = self.preprocessor(nodes)
-        else:
-            nodes_in = nodes
+            dirty_nodes = self.preprocessor(dirty_nodes)
 
-        if self.positional_encoder: 
-            # todo
-            encodings = self.positional_encoder(nodes)
-            nodes = nodes.clone()
-            for b in range(B):
-                nodes[b, :num_nodes[b] + 1] = nodes[b, :num_nodes[b] + 1] + encodings[b, :num_nodes[b] + 1]
-
-        node_feats = self.gnn(nodes_in, adj, weights, B, N)
+        node_feats = self.gnn(dirty_nodes, adj, weights, B, N)
         if self.pooled:
             # If pooled, we expect only a single output node
             mx = node_feats
