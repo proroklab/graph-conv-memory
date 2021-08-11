@@ -76,7 +76,7 @@ class TestWrapOverflow(unittest.TestCase):
             self.fail(f"{nodes[0]} != {desired_nodes[0]}")
 
     def test_wrap_overflow_no_weights(self):
-        self.weights = None
+        self.weights = torch.ones(0)
         self.adj[:, 0, :] = 1
         self.adj[:, :, 0] = 1
         self.nodes[:, 0] = 0
@@ -290,10 +290,10 @@ class TestDenseGCM(unittest.TestCase):
 
     def test_no_weights(self):
         _, (nodes, adj, weights, num_nodes) = self.s(
-            self.obs, (self.nodes, self.adj, None, self.num_nodes)
+            self.obs, (self.nodes, self.adj, torch.ones(0), self.num_nodes)
         )
 
-        if weights is not None:
+        if len(weights) != 0:
             self.fail(f"Weights should be none, is {weights}") 
 
     def test_zeroth_entry(self):
@@ -540,6 +540,62 @@ class TestTemporalEdge(unittest.TestCase):
         if torch.any(tgt_adj != adj):
             self.fail(f"{tgt_adj} != {adj}")
 
+
+class TestDoubleEdge(unittest.TestCase):
+    def setUp(self):
+        feats = 11
+        batches = 5
+        N = 10
+        conv_type = torch_geometric.nn.DenseGCNConv
+        self.g = torch_geometric.nn.Sequential(
+            "x, adj, weights, B, N",
+            [
+                (conv_type(feats, feats), "x, adj -> x"),
+                (torch.nn.ReLU()),
+                (conv_type(feats, feats), "x, adj -> x"),
+                (torch.nn.ReLU()),
+            ],
+        )
+        es = torch_geometric.nn.Sequential(
+            "x, adj, weights, num_nodes, B",
+            [
+                (
+                    TemporalBackedge([1]),
+                    "x, adj, weights, num_nodes, B -> adj, weights"
+                ),
+                (
+                    TemporalBackedge([2]),
+                    "x, adj, weights, num_nodes, B -> adj, weights"
+                ),
+            ]
+        )
+        self.s = DenseGCM(
+            self.g, 
+            edge_selectors=es
+        )
+
+        self.nodes = torch.zeros(batches, N, feats, dtype=torch.float)
+        self.obs = torch.zeros(batches, feats)
+        self.adj = torch.zeros(batches, N, N, dtype=torch.long)
+        self.weights = torch.ones(batches, N, N)
+        self.num_nodes = torch.ones(batches, dtype=torch.long)
+        self.optimizer = torch.optim.Adam(self.s.parameters(), lr=0.005)
+
+    def test_backwards(self):
+        nodes, adj, weights, num_nodes = (
+            self.nodes,
+            self.adj,
+            self.weights,
+            self.num_nodes + 1,
+        )
+        out, (nodes, adj, weights, num_nodes) = self.s(
+            self.obs, (nodes, adj, weights, num_nodes)
+        )
+        self.s.edge_selectors.zero_grad()
+        nodes = torch.rand_like(self.nodes) * torch.nn.Parameter(torch.tensor([0.01]))
+        adj, weights = self.s.edge_selectors(nodes, adj, weights, num_nodes, 5)
+        nodes.mean().backward()
+        self.optimizer.step()
 
 class TestDistanceEdge(unittest.TestCase):
     def setUp(self):
