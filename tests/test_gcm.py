@@ -4,7 +4,7 @@ import torch
 import torch_geometric
 import torchviz
 
-from gcm.gcm import DenseGCM, DenseToSparse, SparseToDense, PositionalEncoding1D
+from gcm.gcm import DenseGCM, DenseToSparse, SparseToDense 
 from gcm.edge_selectors.temporal import TemporalBackedge
 from gcm.edge_selectors.distance import EuclideanEdge, CosineEdge, SpatialEdge
 from gcm.edge_selectors.dense import DenseEdge

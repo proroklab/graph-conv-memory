@@ -4,6 +4,7 @@ from torch_geometric.data import Data, Batch
 from typing import List, Tuple, Union, Any, Dict, Callable
 import time
 import math
+import gcm.util
 
 
 class SparseToDense(torch.nn.Module):
@@ -56,25 +57,6 @@ class PositionalEncoding(torch.nn.Module):
     """Embed positional encoding into the graph. Ensures we do not
     encode future nodes (node_idx > num_nodes)"""
 
-    def up_to_num_nodes_idxs(
-        self, nodes: torch.Tensor, num_nodes: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Given num_nodes, returns idxs from adj
-        up to and including num_nodes. I.e.
-        [batches, 0:num_nodes + 1, :]. Note the order is
-        sorted by (batches, num_nodes + 1) in ascending order"""
-        seq_lens = num_nodes.unsqueeze(-1)
-        N = nodes.shape[1]
-        N_idx = torch.arange(N, device=nodes.device).unsqueeze(0)
-        N_idx = N_idx.expand(seq_lens.shape[0], N_idx.shape[1])
-        # include the current node
-        N_idx = torch.nonzero(N_idx <= num_nodes.unsqueeze(1))
-        assert N_idx.shape[-1] == 2
-        batch_idxs = N_idx[:, 0]
-        node_idxs = N_idx[:, 1]
-
-        return batch_idxs, node_idxs
-
     def __init__(self, max_len: int = 5000):
         super().__init__()
         self.max_len = max_len
@@ -98,7 +80,7 @@ class PositionalEncoding(torch.nn.Module):
         if not hasattr(self, "pe"):
             self.run_once(x)
         
-        b_idxs, n_idxs = self.up_to_num_nodes_idxs(x, num_nodes)
+        b_idxs, n_idxs = gcm.util.idxs_up_to_including_num_nodes(x, num_nodes)
         x[b_idxs, n_idxs] = x[b_idxs, n_idxs] + self.pe[n_idxs, :x.shape[-1]]
         return x
 
