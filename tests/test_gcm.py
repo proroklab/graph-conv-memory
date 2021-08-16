@@ -8,7 +8,7 @@ from gcm.gcm import DenseGCM, DenseToSparse, SparseToDense
 from gcm.edge_selectors.temporal import TemporalBackedge
 from gcm.edge_selectors.distance import EuclideanEdge, CosineEdge, SpatialEdge
 from gcm.edge_selectors.dense import DenseEdge
-from gcm.edge_selectors.bernoulli import BernoulliEdge, sample_hard
+from gcm.edge_selectors.bernoulli import BernoulliEdge, sample_hard, diff_or, diff_or2
 
 
 class TestPositionalEncoding(unittest.TestCase):
@@ -803,6 +803,20 @@ class TestBernoulliEdge(unittest.TestCase):
         self.weights = torch.ones(batches, N, N)
         self.num_nodes = torch.zeros(batches, dtype=torch.long)
 
+    def test_diff_or(self):
+        test = [(torch.rand(32,128,128) > 0.5).float() for i in range(3)]
+        desired = (sum(test) >= 1).float()
+        actual = diff_or(test)
+        if not torch.all(actual == desired):
+            self.fail(f"Desired {desired} actual {actual}")
+
+        actual = diff_or2(test)
+        if not torch.all(actual == desired):
+            self.fail(f"Desired {desired} actual {actual}")
+
+
+
+    """
     def test_update_density(self):
         self.b = BernoulliEdge(5, torch.nn.Sequential(Sum()))
         a = torch.tensor([1.5, 2, 0, 0, 2, 0, 3, 1, 0.2])
@@ -811,7 +825,32 @@ class TestBernoulliEdge(unittest.TestCase):
         self.b.update_density(b)
         rm = self.b.detach_loss()
         self.assertTrue(torch.isclose(rm, torch.cat((a, b)).mean()))
+    """
 
+    def test_sample_hard(self):
+        self.b = BernoulliEdge(5, torch.nn.Sequential())
+        self.num_nodes = torch.tensor([0,1,2])
+        self.weights = torch.zeros_like(self.weights)
+        self.weights[0, 0, 0] = 1e6
+
+        self.weights[1, 1, 1] = 1e6
+        self.weights[1, 0, 1] = 1e6
+
+        # Test valid weights correspond to adj
+        desired = self.adj.clone()
+        # Ensure diagonal (0,0) is set to 0
+        desired[0, 0, 0] = 0.0
+        desired[1, 1, 1] = 0.0
+        # Ensure large, nondiagonal is nonzero
+        desired[1, 0, 1] = 1.0
+
+        # b_idxs, curr_idx, past_idxs = ([0, 0, 1, 1], [2, 2, 2, 2], [0, 1, 0, 1])
+        adj = sample_hard(self.adj, self.weights, self.num_nodes)
+        if torch.any(desired != adj):
+            self.fail(f"{desired} != {adj}")
+
+
+    '''
     def test_weight_to_adj(self):
         self.b = BernoulliEdge(5, torch.nn.Sequential(Sum()))
         self.weights = torch.zeros_like(self.weights)
@@ -832,6 +871,7 @@ class TestBernoulliEdge(unittest.TestCase):
         """
         if torch.any(desired != self.adj):
             self.fail(f"{desired} != {self.adj}")
+    '''
 
     def test_indexing(self):
         self.b = BernoulliEdge(5, torch.nn.Sequential(Sum()))
@@ -842,7 +882,7 @@ class TestBernoulliEdge(unittest.TestCase):
             torch.ones_like(self.obs) * 0.2,
             torch.ones_like(self.obs) * 0.3,
         ]
-        self.weights = torch.zeros_like(self.weights).clamp(*self.b.clamp_range)
+        self.weights = torch.zeros_like(self.weights)
 
         (nodes, adj, weights, num_nodes) = (
             self.nodes,
@@ -902,6 +942,37 @@ class TestBernoulliEdge(unittest.TestCase):
         self.assertTrue(adj.grad_fn, "Adj has no gradient")
         self.assertTrue(weights.grad_fn, "Weight has no gradient")
 
+    def test_backward_multiple_selectors(self):
+        selector = torch_geometric.nn.Sequential(
+            "nodes, adj, weights, num_nodes, B",
+            [
+                (
+                    TemporalBackedge(), 
+                    "nodes, adj, weights, num_nodes, B -> adj, weights"
+                ),
+                (
+                    BernoulliEdge(5),
+                    "nodes, adj, weights, num_nodes, B -> adj, weights"
+                ),
+            ]
+        )
+        self.s = DenseGCM(
+            self.g, 
+            edge_selectors=selector
+        )
+        out, (nodes, adj, weights, num_nodes) = self.s(
+            self.obs, (self.nodes, self.adj, self.weights, self.num_nodes)
+        )
+        # First run has no gradient as no edges to be made
+        out, (nodes, adj, weights, num_nodes) = self.s(
+            self.obs, (nodes, adj, weights, num_nodes)
+        )
+        adj, weights = self.s.edge_selectors(nodes, adj, weights, num_nodes, 5)
+        self.assertTrue(adj.grad_fn, "Adj has no gradient")
+        self.assertTrue(weights.grad_fn, "Weight has no gradient")
+        adj.mean().backward()
+        self.optimizer.step()
+
     def test_backwards(self):
         nodes, adj, weights, num_nodes = (
             self.nodes,
@@ -918,6 +989,7 @@ class TestBernoulliEdge(unittest.TestCase):
         adj.mean().backward()
         self.optimizer.step()
 
+    """
     def test_reg_loss(self):
         feats = 5
         batches = 2
@@ -950,6 +1022,7 @@ class TestBernoulliEdge(unittest.TestCase):
 
         if not losses[-1] < losses[0]:
             self.fail(f"Final loss {losses[-1]} not better than init loss {losses[0]}")
+        """
 
     def test_logit_index(self):
         # Given 3 nodes, make sure we compare node 3 to nodes 1,2

@@ -1,6 +1,48 @@
 import torch
 import itertools
 from typing import Dict, Tuple, List
+import gcm.util
+
+
+class STEFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input):
+        return (input > 0).float()
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        #return torch.nn.functional.hardtanh(grad_output)
+        return grad_output
+
+class StraightThroughEstimator(torch.nn.Module):
+    def __init__(self):
+        super(StraightThroughEstimator, self).__init__()
+
+    def forward(self, x):
+        x = STEFunction.apply(x)
+        return x
+
+
+@torch.jit.script
+def diff_or(tensors: List[torch.Tensor]):
+    """Differentiable OR operation bewteen n-tuple of tensors
+    Input: List[tensors in {0,1}]
+    Output: tensor in {0,1}"""
+    # This nice form is actually slower than the matrix mult form
+    return 1 - (1 - torch.stack(tensors, dim=0)).prod(dim=0)
+
+
+
+@torch.jit.script
+def diff_or2(tensors: List[torch.Tensor]):
+    """Differentiable OR operation bewteen n-tuple of tensors
+    Input: List[tensors in {0,1}]
+    Output: tensor in {0,1}"""
+    res = torch.zeros_like(tensors[0])
+    for t in tensors:
+        tmp = res.clone()
+        res = tmp + t - tmp * t
+    return res
 
 
 @torch.jit.script
@@ -25,20 +67,46 @@ def up_to_num_nodes_idxs(
     return batch_idxs, past_idxs, curr_idx
 
 
-@torch.jit.script
-def sample_hard(x: torch.Tensor, clamp_range: Tuple[float, float]) -> torch.Tensor:
+def sample_hard(
+        adj: torch.Tensor, 
+        weights: torch.Tensor, 
+        num_nodes: torch.Tensor, 
+        num_edges: int = 2
+    ) -> torch.Tensor:
     """
-    Randomly sample a Bernoulli distribution and return the argmax.
-    E.g. sample_hard(torch.tensor([0.4, 0.99, 0]) will likely return
-    either [0, 1, 0] or [1, 1, 0]. Note that the inputs are expected to
-    be probabilities and are clamped to self.clamp_range for numerical
-    stability.
+    Input: Tensor of logits (weights)
+    Output: Tensor in {0, 1} (adjacency)
 
-    This uses the gumbel_softmax trick to make argmax differentiable
+    Converts logits x into a softmax distribution over all possible edges
+    (i, j) for a node i. Samples from said distribution num_edges times
+    using the gumbel-softmax trick. The entire process is differentiable.
+
+    This process is used to fill out the adjacency matrix, while enforcing sparsity
+    by upper-bounding each node to num_edges edges. Because the diagonal is set to
+    zero, the lower bound of edges per node is zero (not one).
     """
 
-    res = torch.stack((1.0 - x, x), dim=0).clamp(*clamp_range)
-    return torch.nn.functional.gumbel_softmax(torch.log(res), hard=True, dim=0)[1]
+    new_adj = adj.clone()
+    B = weights.shape[0]
+    for b in range(B):
+        weight = weights[b]
+        # Shrink weights to existing nodes
+        valid_weight = weight.narrow(0, 0, num_nodes[b] + 1).narrow(1, 0, num_nodes[b] + 1)
+
+        for i in range(num_edges):
+            # Each adj will only hold one edge per node
+            # run thru i times to collect i edges
+            ith_adj = torch.nn.functional.gumbel_softmax(
+                valid_weight, hard=True, dim=1
+            )
+
+            ith_adj_padded = torch.zeros_like(weights[b])
+            ith_adj_padded[:num_nodes[b] + 1, :num_nodes[b] + 1] = ith_adj
+            # bitwise union/or but differentiable
+            new_adj[b] = diff_or2((ith_adj_padded, new_adj[b].clone()))
+    # Zero self edges or they are counted twice
+    new_adj.diagonal(dim1=-1, dim2=-2)[:] = 0
+    return new_adj
 
 
 class BernoulliEdge(torch.nn.Module):
@@ -49,19 +117,16 @@ class BernoulliEdge(torch.nn.Module):
         self,
         input_size: int = 0,
         model: torch.nn.Sequential = None,
-        clamp_range=(0.0001, 0.9999),
         backward_edges: bool = False,
+        desired_num_edges: int = 5,
+        probabilistic: bool = True,
         # gradient_scale: float = 0.5
     ):
-        self.clamp_range: Tuple[float] = clamp_range
-        self.backward_edges = backward_edges
         super().__init__()
-        # for p in self.parameters():
-        #    p.register_hook(lambda grad: grad / gradient_scale)
-        # init loss
-        self.density = torch.tensor(0)
-        self.density_numel = torch.tensor(0)
-        self.detach_loss()
+        self.backward_edges = backward_edges
+        self.probabilistic = probabilistic
+        self.desired_num_edges = desired_num_edges
+        self.ste = StraightThroughEstimator()
         assert input_size or model, "Must specify either input_size or model"
         if model:
             self.edge_network = model
@@ -86,45 +151,7 @@ class BernoulliEdge(torch.nn.Module):
             torch.nn.Linear(2 * input_size, input_size),
             torch.nn.Tanh(),
             torch.nn.Linear(input_size, 1),
-            torch.nn.Sigmoid(),
         )
-
-    def detach_loss(self):
-        """Returns a copy of the accumulated loss and resets the loss
-        and associated gradient to zero. Call this exactly once
-        per each backward pass."""
-        loss = self.density.clone() / self.density_numel
-        self.density = torch.tensor(0)
-        self.density_numel = torch.tensor(0)
-        return loss
-
-    def compute_full_loss(self, nodes: torch.Tensor, B: int):
-        """Compute loss over the entire weight node matrix.
-        (B, N, feat) by (B, N*N, feat)"""
-        N = nodes.shape[1]
-        feat = nodes.shape[-1]
-        # Right: from [[0, 1, 2], [3,4,5]]
-        # to [[0,1,2], [3,4,5], [0,1,2], [3,4,5] ... ]
-        left_nodes = nodes.repeat_interleave(N, dim=1)
-        # Left: from [[0, 1, 2], [3,4,5]]
-        # to [[0,1,2], [0,1,2]... [3,4,5], [3,4,5]]
-        right_nodes = nodes.repeat(1, N, 1)
-        edge_net_in = torch.cat((left_nodes, right_nodes), dim=-1)
-        # Free memory
-        del left_nodes
-        del right_nodes
-        # Edge network expects [B, feat] but we have [B, N, feat]
-        # so flatten to [B, feat] for big perf gainz and unflatten
-        batch_in = edge_net_in.view(B * N ** 2, 2 * feat)
-        batch_out = self.edge_network(batch_in)
-        return batch_out.mean()
-
-    def update_density(self, probs):
-        """Updates the density as a moving mean"""
-        # https://math.stackexchange.com/questions/106700/incremental-averageing
-        if self.training:
-            self.density = self.density + probs.sum()
-            self.density_numel = self.density_numel + probs.numel()
 
     def compute_logits2(
         self,
@@ -137,9 +164,9 @@ class BernoulliEdge(torch.nn.Module):
         Returns a modified copy of the weight matrix containing edge probs"""
         # No edges for a single node
         if torch.max(num_nodes) < 1:
-            return weights.clamp(*self.clamp_range)
+            return weights
 
-        b_idxs, past_idxs, curr_idx = up_to_num_nodes_idxs(weights, num_nodes)
+        b_idxs, past_idxs, curr_idx = gcm.util.idxs_up_to_num_nodes(weights, num_nodes)
         # curr_idx > past_idxs
         # flows from past_idxs to j
         # so [j, past_idxs]
@@ -147,67 +174,13 @@ class BernoulliEdge(torch.nn.Module):
         past_nodes = nodes[b_idxs, past_idxs]
 
         net_in = torch.cat((curr_nodes, past_nodes), dim=-1)
-        net_out = self.edge_network(net_in)
-        probs = net_out.clamp(*self.clamp_range).squeeze()
+        log_probs = self.edge_network(net_in).squeeze()
         # TODO: weights[:,0] is not populated, why?
-        weights[b_idxs, curr_idx, past_idxs] = probs
-        self.update_density(probs)
-        # self.density = self.density + probs.mean()
+        weights[b_idxs, curr_idx, past_idxs] = log_probs
 
         if self.backward_edges:
             net_in = torch.cat((past_nodes, curr_nodes), dim=-1)
-            probs = net_out.clamp(*self.clamp_range).squeeze()
-            weights[b_idxs, past_idxs, curr_idx] = probs
-            self.update_density(probs)
-            # self.density = self.density + probs.mean()
-
-        return weights
-
-    def compute_logits(
-        self,
-        nodes: torch.Tensor,
-        num_nodes: torch.Tensor,
-        weights: torch.Tensor,
-        B: int,
-    ):
-        """Computes edge probability between current node and all other nodes.
-        Returns a modified copy of the weight matrix containing edge probs"""
-
-        # No edges for a single node
-        if torch.max(num_nodes) == 0:
-            return weights.clamp(*self.clamp_range)
-
-        B_idx = torch.arange(B)
-        n = torch.max(num_nodes)
-        # N = nodes.shape[1]
-        feat = nodes.shape[-1]
-
-        left_nodes = torch.stack([nodes[B_idx, num_nodes[B_idx]]] * n, dim=1)
-        right_nodes = nodes[:, :n, :]
-        edge_net_in = torch.cat((left_nodes, right_nodes), dim=-1)
-        # Edge network expects [B, feat] but we have [B, N, feat]
-        # so flatten to [B, feat] for big perf gainz and unflatten
-        batch_in = edge_net_in.view(B * n, 2 * feat)
-        batch_out = self.edge_network(batch_in)
-        probs = batch_out.view(B, n).clamp(*self.clamp_range)
-        self.density = self.density + probs.mean()
-
-        # Undirected edges
-        # TODO: This is not equivariant as nn(a,b) != nn(b,a), run both dirs thru
-        # and mean the output
-        # TODO: Experiment with directed edges
-        # TODO: Vectorize
-        # TODO: Do not push all N nodes thru net, only push num_nodes
-        for b in B_idx:
-            # This does NOT add self edge [num_nodes[b], num_nodes[b]]
-            #
-            # For directed edges:
-            # DenseGraphConv does Adj @ nodes
-            # so A[i, j] corresponds to aggregating i when convolving
-            # the jth row
-            if self.backward_edges:
-                weights[b, num_nodes[b], : num_nodes[b]] = probs[b][: num_nodes[b]]
-            weights[b, : num_nodes[b], num_nodes[b]] = probs[b][: num_nodes[b]]
+            weights[b_idxs, past_idxs, curr_idx] = log_probs
 
         return weights
 
@@ -225,11 +198,7 @@ class BernoulliEdge(torch.nn.Module):
 
         # Weights serve as probabilities that we sample from
         weights = self.compute_logits2(nodes, num_nodes, weights, B)
-        # TODO: we should only sample up to num_nodes
-        b_idxs, past_idxs, curr_idx = up_to_num_nodes_idxs(weights, num_nodes)
-        # Only sample entries that exist
-        # otherwise we may accumulate zeros
-        if len(b_idxs) > 0:
-            adj = sample_hard(weights, self.clamp_range)
+        # Combine new sampled adj with prev adj
+        new_adj = sample_hard(adj, weights, num_nodes, self.desired_num_edges)
 
-        return adj, weights
+        return new_adj, weights
