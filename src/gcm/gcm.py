@@ -57,9 +57,11 @@ class PositionalEncoding(torch.nn.Module):
     """Embed positional encoding into the graph. Ensures we do not
     encode future nodes (node_idx > num_nodes)"""
 
-    def __init__(self, max_len: int = 5000):
+    def __init__(self, max_len: int = 5000, mode="add"):
         super().__init__()
         self.max_len = max_len
+        self.mode = mode
+        assert mode in ["add", "cat"]
 
     def run_once(self, x: torch.Tensor) -> None:
         # Dim must be even
@@ -81,7 +83,13 @@ class PositionalEncoding(torch.nn.Module):
             self.run_once(x)
         
         b_idxs, n_idxs = gcm.util.idxs_up_to_including_num_nodes(x, num_nodes)
-        x[b_idxs, n_idxs] = x[b_idxs, n_idxs] + self.pe[n_idxs, :x.shape[-1]]
+        if self.mode == "add":
+            x[b_idxs, n_idxs] = x[b_idxs, n_idxs] + self.pe[n_idxs, :x.shape[-1]]
+        elif self.mode == "cat":
+            # TODO: we should zero out entries beyond num_nodes
+            raise NotImplementedError("Invalid mode")
+        else:
+            raise NotImplementedError("Invalid mode")
         return x
 
 @torch.jit.script
@@ -113,6 +121,9 @@ class DenseGCM(torch.nn.Module):
         # to the nodes
         # Creates an ordering in the graph
         positional_encoding: bool = False,
+        # Whether to use edge_weights
+        # only required if using learned edges
+        edge_weights: bool = False,
     ):
         super().__init__()
 
@@ -121,13 +132,33 @@ class DenseGCM(torch.nn.Module):
         self.graph_size = graph_size
         self.edge_selectors = edge_selectors
         self.pooled = pooled
+        self.edge_weights = edge_weights
         if positional_encoding:
             self.positional_encoder = PositionalEncoding(self.graph_size)
         else:
             self.positional_encoder = None
 
+    def get_initial_hidden_state(self, x):
+        """Given a dummy x of shape [B, feats], construct
+        the hidden state for the base case (adj matrix, weights, etc)"""
+        """Returns the initial hidden state h (e.g. h, output = gcm(input, h)),
+        for a given batch size (B). Feats denotes the feature size (# dims of each
+        node in the graph)."""
+
+        assert x.dim() == 2
+        B, feats = x.shape
+        edges = torch.zeros(B, self.graph_size, self.graph_size)
+        nodes = torch.zeros(B, self.graph_size, feats)
+        if self.edge_weights:
+            weights = torch.zeros(B, self.graph_size, self.graph_size)
+        else:
+            weights = torch.zeros(0)
+        num_nodes = torch.zeros(B, dtype=torch.long)
+
+        return nodes, edges, weights, num_nodes
+
     def forward(
-        self, x, hidden: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+        self, x, hidden: Union[None, Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Add a memory x to the graph, and query the memory for it.
         B = batch size
@@ -149,6 +180,10 @@ class DenseGCM(torch.nn.Module):
                 number_of_nodes_in_graph: [B]
             )
         """
+        # Base case
+        if hidden == None:
+            hidden = self.get_initial_hidden_state(x)
+
         nodes, adj, weights, num_nodes = hidden
 
         assert x.dtype == torch.float32
