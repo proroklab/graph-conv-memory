@@ -57,10 +57,11 @@ class PositionalEncoding(torch.nn.Module):
     """Embed positional encoding into the graph. Ensures we do not
     encode future nodes (node_idx > num_nodes)"""
 
-    def __init__(self, max_len: int = 5000, mode="add"):
+    def __init__(self, max_len: int = 5000, mode="add", cat_dim: int=8):
         super().__init__()
         self.max_len = max_len
         self.mode = mode
+        self.cat_dim = cat_dim
         assert mode in ["add", "cat"]
 
     def run_once(self, x: torch.Tensor) -> None:
@@ -72,6 +73,9 @@ class PositionalEncoding(torch.nn.Module):
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         self.register_buffer('pe', pe)
+
+        if self.mode == "cat":
+            self.reproject = torch.nn.Linear(x.shape[-1], x.shape[-1] - self.cat_dim, device=x.device)
 
     def forward(self, x: torch.Tensor, num_nodes: torch.Tensor) -> torch.Tensor:
         """
@@ -86,8 +90,12 @@ class PositionalEncoding(torch.nn.Module):
         if self.mode == "add":
             x[b_idxs, n_idxs] = x[b_idxs, n_idxs] + self.pe[n_idxs, :x.shape[-1]]
         elif self.mode == "cat":
-            # TODO: we should zero out entries beyond num_nodes
-            raise NotImplementedError("Invalid mode")
+            x_reproj = self.reproject(x[b_idxs, n_idxs]).reshape(len(b_idxs), x.shape[-1] - self.cat_dim)
+            # positional encoding
+            x = x.clone()
+            x[b_idxs, n_idxs, :self.cat_dim] = self.pe[n_idxs, :self.cat_dim]
+            # Reprojected feature assignment
+            x[b_idxs, n_idxs, self.cat_dim:] = x_reproj
         else:
             raise NotImplementedError("Invalid mode")
         return x
@@ -113,6 +121,10 @@ class DenseGCM(torch.nn.Module):
         # you can chain multiple selectors together using
         # torch_geometric.nn.Sequential
         edge_selectors: torch.nn.Module = None,
+        # Auxiliary edge selectors are called
+        # after the positional encoding and reprojection
+        # this should only be used for non-human (learned) priors
+        aux_edge_selectors: torch.nn.Module = None,
         # Maximum number of nodes in the graph
         graph_size: int = 128,
         # Whether the gnn outputs graph_size nodes or uses global pooling
@@ -120,7 +132,7 @@ class DenseGCM(torch.nn.Module):
         # Whether to add sin/cos positional encoding like in transformer
         # to the nodes
         # Creates an ordering in the graph
-        positional_encoding: bool = False,
+        positional_encoder: torch.nn.Module = None,
         # Whether to use edge_weights
         # only required if using learned edges
         edge_weights: bool = False,
@@ -131,12 +143,10 @@ class DenseGCM(torch.nn.Module):
         self.gnn = gnn
         self.graph_size = graph_size
         self.edge_selectors = edge_selectors
+        self.aux_edge_selectors = aux_edge_selectors
         self.pooled = pooled
         self.edge_weights = edge_weights
-        if positional_encoding:
-            self.positional_encoder = PositionalEncoding(self.graph_size)
-        else:
-            self.positional_encoder = None
+        self.positional_encoder = positional_encoder
 
     def get_initial_hidden_state(self, x):
         """Given a dummy x of shape [B, feats], construct
@@ -219,24 +229,25 @@ class DenseGCM(torch.nn.Module):
         # Do all mutation operations on dirty_nodes, 
         # then use clean nodes in the graph state
         dirty_nodes = nodes.clone()
-        if self.positional_encoder:
-            dirty_nodes = self.positional_encoder(dirty_nodes, num_nodes)
-
         # Do NOT add self edges or they will be counted twice using
         # GraphConv
         
         # Adj and weights must be cloned as
         # edge selectors will modify them in-place
-        adj = adj.clone()
-        weights = weights.clone()
         if self.edge_selectors:
             adj, weights = self.edge_selectors(
-                dirty_nodes, adj, weights, num_nodes, B
+                dirty_nodes, adj.clone(), weights.clone(), num_nodes, B
             )
 
         # Thru network
         if self.preprocessor:
             dirty_nodes = self.preprocessor(dirty_nodes)
+        if self.positional_encoder:
+            dirty_nodes = self.positional_encoder(dirty_nodes, num_nodes)
+        if self.aux_edge_selectors:
+            adj, weights = self.edge_selectors(
+                dirty_nodes, adj.clone(), weights.clone(), num_nodes, B
+            )
 
         node_feats = self.gnn(dirty_nodes, adj, weights, B, N)
         if self.pooled:

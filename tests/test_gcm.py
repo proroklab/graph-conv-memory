@@ -4,7 +4,7 @@ import torch
 import torch_geometric
 import torchviz
 
-from gcm.gcm import DenseGCM, DenseToSparse, SparseToDense 
+from gcm.gcm import DenseGCM, DenseToSparse, SparseToDense, PositionalEncoding
 from gcm.edge_selectors.temporal import TemporalBackedge
 from gcm.edge_selectors.distance import EuclideanEdge, CosineEdge, SpatialEdge
 from gcm.edge_selectors.dense import DenseEdge
@@ -23,7 +23,11 @@ class TestPositionalEncoding(unittest.TestCase):
                 (lambda x: x, "x -> x"),
             ],
         )
-        self.s = DenseGCM(self.g, positional_encoding=True)
+        self.pe = PositionalEncoding(
+            max_len=N,
+            mode="add",
+        )
+        #self.s = DenseGCM(self.g, positional_encoder=self.pe)
 
         self.nodes = torch.zeros(batches, N, feats)
         self.obs = torch.ones(batches, feats)
@@ -31,8 +35,8 @@ class TestPositionalEncoding(unittest.TestCase):
         self.weights = torch.ones(batches, N, N)
         self.num_nodes = torch.tensor([0, 7])
 
-    def test_pos_enc(self):
-        enc = self.s.positional_encoder(self.nodes.clone(), self.num_nodes)
+    def test_pos_enc_add(self):
+        enc = self.pe(self.nodes.clone(), self.num_nodes)
         if not torch.all(enc[0,1,:] == 0):
             self.fail("Off by one error in encoder (overflow)")
 
@@ -66,7 +70,7 @@ class TestPositionalEncoding(unittest.TestCase):
         if torch.abs(cos_actual -  cos_desired).sum() > 0.01:
             self.fail(f"Cosine zeroth row desired {cos_desired} actual {cos_actual}")
 
-        enc = self.s.positional_encoder(self.nodes.clone(), self.num_nodes + 1)
+        enc = self.pe(self.nodes.clone(), self.num_nodes + 1)
         desired = torch.tensor(
             [
                 math.sin( (1/10000)**(0/6)),
