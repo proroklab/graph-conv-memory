@@ -77,3 +77,29 @@ for t in train_timestep:
    action_logits = logits_nn(belief)
    state_value = vf_nn(belief)
 ```
+
+We provide a few edge selectors, which we briefly detail here:
+```
+gcm.edge_selectors.temporal.TemporalBackedge
+# Connections to the past. Give it [1,2,4] to connect each
+# observation t to t-1, t-2, and t-4.
+
+gcm.edge_selectors.dense.DenseEdge
+# Connections to all past observations
+# observation t is connected to t-1, t-2, ... 0
+
+gcm.edge_selectors.distance.EuclideanEdge
+# Connections to observations within some max_distance
+# e.g. if l2_norm(o_t, o_k) < max_distance, create an edge
+
+gcm.edge_selectors.distance.CosineEdge
+# Like euclidean edge, but using cosine similarity instead
+
+gcm.edge_selectors.distance.SpatialEdge
+# Euclidean distance, but only compares slices from the observation
+# this is useful if you have an 'x' and 'y' dimension in your observation
+# and only want to connect nearby entries
+#
+# You can also implement the identity priors using this by setting
+# max_distance to something like 1e-6
+```
