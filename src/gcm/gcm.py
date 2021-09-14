@@ -53,6 +53,42 @@ class DenseToSparse(torch.nn.Module):
         return x, edge_index, batch_idx
 
 
+class RelativePositionalEncoding(torch.nn.Module):
+    def __init__(self, max_len: int = 5000):
+        super().__init__()
+        self.max_len = max_len
+
+    def run_once(self, nodes: torch.Tensor) -> None:
+        # Dim must be even
+        d_model = math.ceil(nodes.shape[-1] / 2) * 2
+        position = torch.arange(self.max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(self.max_len, d_model, device=nodes.device)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, nodes: torch.Tensor, num_nodes: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Tensor, shape [batch_size, seq_len, embedding_dim]
+            num_nodes: Tensor
+        """
+        if not hasattr(self, "pe"):
+            self.run_once(nodes)
+        
+        B = nodes.shape[0]
+        for b in range(B):
+            center = num_nodes[b]
+            pe = self.pe.roll(int(center), 0)
+            nodes[b, :center + 1] = (
+                nodes[b, :center + 1] + 
+                pe[:center + 1,:nodes.shape[-1]]
+            )
+        return nodes
+
+
+
 class PositionalEncoding(torch.nn.Module):
     """Embed positional encoding into the graph. Ensures we do not
     encode future nodes (node_idx > num_nodes)"""
@@ -245,7 +281,7 @@ class DenseGCM(torch.nn.Module):
         if self.positional_encoder:
             dirty_nodes = self.positional_encoder(dirty_nodes, num_nodes)
         if self.aux_edge_selectors:
-            adj, weights = self.edge_selectors(
+            adj, weights = self.aux_edge_selectors(
                 dirty_nodes, adj.clone(), weights.clone(), num_nodes, B
             )
 
