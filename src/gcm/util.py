@@ -1,6 +1,42 @@
 import torch
-from typing import Tuple
+import sparsemax
+from typing import Tuple, List
 
+class Spardmax(torch.nn.Module):
+    """A hard version of sparsemax"""
+    def __init__(self, dim=-1):
+        super().__init__()
+        self.dim = dim
+        self.sm = sparsemax.Sparsemax(dim)
+    
+    def forward(self, x):
+        # Straight through.
+        y_soft = self.sm(x)
+        y_hard = (y_soft != 0).float()
+        return y_hard - y_soft.detach() + y_soft
+
+    
+
+
+@torch.jit.script
+def diff_or(tensors: List[torch.Tensor]):
+    """Differentiable OR operation bewteen n-tuple of tensors
+    Input: List[tensors in {0,1}]
+    Output: tensor in {0,1}"""
+    res = torch.zeros_like(tensors[0])
+    for t in tensors:
+        tmp = res.clone()
+        res = tmp + t - tmp * t
+    return res
+
+
+@torch.jit.script
+def diff_or2(tensors: List[torch.Tensor]):
+    """Differentiable OR operation bewteen n-tuple of tensors
+    Input: List[tensors in {0,1}]
+    Output: tensor in {0,1}"""
+    # This nice form is actually slower than the matrix mult form
+    return 1 - (1 - torch.stack(tensors, dim=0)).prod(dim=0)
 
 @torch.jit.script
 def idxs_up_to_including_num_nodes(

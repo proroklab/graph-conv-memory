@@ -4,47 +4,6 @@ from typing import Dict, Tuple, List
 import gcm.util
 
 
-class STEFunction(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, input):
-        return (input > 0).float()
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        #return torch.nn.functional.hardtanh(grad_output)
-        return grad_output
-
-class StraightThroughEstimator(torch.nn.Module):
-    def __init__(self):
-        super(StraightThroughEstimator, self).__init__()
-
-    def forward(self, x):
-        x = STEFunction.apply(x)
-        return x
-
-
-@torch.jit.script
-def diff_or(tensors: List[torch.Tensor]):
-    """Differentiable OR operation bewteen n-tuple of tensors
-    Input: List[tensors in {0,1}]
-    Output: tensor in {0,1}"""
-    # This nice form is actually slower than the matrix mult form
-    return 1 - (1 - torch.stack(tensors, dim=0)).prod(dim=0)
-
-
-
-@torch.jit.script
-def diff_or2(tensors: List[torch.Tensor]):
-    """Differentiable OR operation bewteen n-tuple of tensors
-    Input: List[tensors in {0,1}]
-    Output: tensor in {0,1}"""
-    res = torch.zeros_like(tensors[0])
-    for t in tensors:
-        tmp = res.clone()
-        res = tmp + t - tmp * t
-    return res
-
-
 @torch.jit.script
 def up_to_num_nodes_idxs(
     adj: torch.Tensor, num_nodes: torch.Tensor
@@ -66,6 +25,43 @@ def up_to_num_nodes_idxs(
 
     return batch_idxs, past_idxs, curr_idx
 
+def sample_hard_deterministic(
+        adj: torch.Tensor, 
+        weights: torch.Tensor,
+        num_nodes: torch.Tensor, 
+        num_edges: int = 2
+    ) -> torch.Tensor:
+    """
+    Input: Tensor of logits (weights)
+    Output: Tensor in {0, 1} (adjacency)
+
+    Converts logits x into a softmax distribution over all possible edges
+    (i, j) for a node i. Samples from said distribution num_edges times
+    using the gumbel-softmax trick. The entire process is differentiable.
+
+    This process is used to fill out the adjacency matrix, while enforcing sparsity
+    by upper-bounding each node to num_edges edges. Because the diagonal is set to
+    zero, the lower bound of edges per node is zero (not one).
+    """
+
+    new_adj = adj.clone()
+    B = adj.shape[0]
+    sm = gcm.util.Spardmax()
+
+    for b in range(B):
+        if num_nodes[b] < 1:
+            continue
+        col = sm(weights[b, num_nodes[b], :num_nodes[b]].reshape(1,-1)).reshape(-1)
+        new_adj[b, num_nodes[b], :num_nodes[b]] = col
+        '''
+        for i in range(num_edges):
+            sampled_col = torch.nn.functional.gumbel_softmax(
+                weights[b, num_nodes[b]], hard=True
+            )
+            new_adj[b, num_nodes[b]] = sampled_col
+        '''
+        
+    return new_adj
 
 def sample_hard(
         adj: torch.Tensor, 
@@ -103,7 +99,7 @@ def sample_hard(
             ith_adj_padded = torch.zeros_like(weights[b])
             ith_adj_padded[:num_nodes[b] + 1, :num_nodes[b] + 1] = ith_adj
             # bitwise union/or but differentiable
-            new_adj[b] = diff_or2((ith_adj_padded, new_adj[b].clone()))
+            new_adj[b] = gcm.util.diff_or((ith_adj_padded, new_adj[b].clone()))
     # Zero self edges or they are counted twice
     new_adj.diagonal(dim1=-1, dim2=-2)[:] = 0
     return new_adj
@@ -119,14 +115,13 @@ class BernoulliEdge(torch.nn.Module):
         model: torch.nn.Sequential = None,
         backward_edges: bool = False,
         desired_num_edges: int = 5,
-        probabilistic: bool = True,
+        deterministic: bool = False,
         # gradient_scale: float = 0.5
     ):
         super().__init__()
         self.backward_edges = backward_edges
-        self.probabilistic = probabilistic
+        self.deterministic = deterministic
         self.desired_num_edges = desired_num_edges
-        self.ste = StraightThroughEstimator()
         assert input_size or model, "Must specify either input_size or model"
         if model:
             self.edge_network = model
@@ -134,6 +129,8 @@ class BernoulliEdge(torch.nn.Module):
             # This MUST be done here
             # if done in forward model does not learn...
             self.edge_network = self.build_edge_network(input_size)
+        if deterministic:
+            self.sm = gcm.util.Spardmax()
 
     def sample_random_var(self, p: torch.Tensor) -> torch.Tensor:
         """Given a probability [0,1] p, return a backprop-capable random sample"""
@@ -152,6 +149,40 @@ class BernoulliEdge(torch.nn.Module):
             torch.nn.Tanh(),
             torch.nn.Linear(input_size, 1),
         )
+
+    def compute_new_adj(
+        self,
+        nodes: torch.Tensor,
+        num_nodes: torch.Tensor,
+        adj: torch.Tensor,
+        B: int,
+    ):
+        # No edges for a single node
+        if torch.max(num_nodes) < 1:
+            return weights
+
+        b_idxs, past_idxs, curr_idx = gcm.util.idxs_up_to_num_nodes(adj, num_nodes)
+        # curr_idx > past_idxs
+        # flows from past_idxs to j
+        # so [j, past_idxs]
+        curr_nodes = nodes[b_idxs, curr_idx]
+        past_nodes = nodes[b_idxs, past_idxs]
+
+        net_in = torch.cat((curr_nodes, past_nodes), dim=-1)
+        logits = self.edge_network(net_in).squeeze()
+
+        shaped_logits = torch.zeros_like(adj)
+        new_adj = adj.clone()
+        shaped_logits[b_idxs, curr_idx, past_idxs] = logits
+        for b in range(B):
+            if num_nodes[b] < 1:
+                continue
+            # TODO: should we multiply prev adj to care about
+            # potentially other edge selectors in the queue?
+            new_adj[b, num_nodes[b], :num_nodes[b]] = self.sm(
+                shaped_logits[b, num_nodes[b], :num_nodes[b]].unsqueeze(0)
+            )
+        return new_adj
 
     def compute_logits2(
         self,
@@ -196,9 +227,13 @@ class BernoulliEdge(torch.nn.Module):
         if self.edge_network[0].weight.device != nodes.device:
             self.edge_network = self.edge_network.to(nodes.device)
 
-        # Weights serve as probabilities that we sample from
-        weights = self.compute_logits2(nodes, num_nodes, weights, B)
-        # Combine new sampled adj with prev adj
-        new_adj = sample_hard(adj, weights, num_nodes, self.desired_num_edges)
+        if torch.max(num_nodes) < 1:
+            return adj, weights
 
+        if self.deterministic:
+            new_adj = self.compute_new_adj(nodes, num_nodes, adj, B)
+        else:
+            weights = self.compute_logits2(nodes, num_nodes, weights, B)
+            new_adj = sample_hard(adj, weights, num_nodes, self.desired_num_edges)
         return new_adj, weights
+
