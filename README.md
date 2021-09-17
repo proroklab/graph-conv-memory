@@ -35,7 +35,7 @@ pip install graph-conv-memory
 ## Quickstart
 Below is a quick example of how to use GCM in a basic RL problem:
 
-```
+```python
 import torch
 import torch_geometric
 from gcm.gcm import DenseGCM
@@ -79,7 +79,7 @@ for t in train_timestep:
 ```
 
 We provide a few edge selectors, which we briefly detail here:
-```
+```python
 gcm.edge_selectors.temporal.TemporalBackedge
 # Connections to the past. Give it [1,2,4] to connect each
 # observation t to t-1, t-2, and t-4.
