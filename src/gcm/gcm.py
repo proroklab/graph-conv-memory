@@ -193,13 +193,13 @@ class DenseGCM(torch.nn.Module):
 
         assert x.dim() == 2
         B, feats = x.shape
-        edges = torch.zeros(B, self.graph_size, self.graph_size)
-        nodes = torch.zeros(B, self.graph_size, feats)
+        edges = torch.zeros(B, self.graph_size, self.graph_size, device=x.device)
+        nodes = torch.zeros(B, self.graph_size, feats, device=x.device)
         if self.edge_weights:
-            weights = torch.zeros(B, self.graph_size, self.graph_size)
+            weights = torch.zeros(B, self.graph_size, self.graph_size, device=x.device)
         else:
-            weights = torch.zeros(0)
-        num_nodes = torch.zeros(B, dtype=torch.long)
+            weights = torch.zeros(0, device=x.device)
+        num_nodes = torch.zeros(B, dtype=torch.long, device=x.device)
 
         return nodes, edges, weights, num_nodes
 
@@ -278,12 +278,17 @@ class DenseGCM(torch.nn.Module):
         # Thru network
         if self.preprocessor:
             dirty_nodes = self.preprocessor(dirty_nodes)
-        if self.positional_encoder:
-            dirty_nodes = self.positional_encoder(dirty_nodes, num_nodes)
+        #if self.positional_encoder:
+        #   dirty_nodes = self.positional_encoder(dirty_nodes, num_nodes)
         if self.aux_edge_selectors:
-            adj, weights = self.aux_edge_selectors(
-                dirty_nodes, adj.clone(), weights.clone(), num_nodes, B
-            )
+            if self.positional_encoder:
+                adj, weights = self.aux_edge_selectors(
+                    self.positional_encoder(dirty_nodes, num_nodes), adj.clone(), weights.clone(), num_nodes, B
+                )
+            else:
+                adj, weights = self.aux_edge_selectors(
+                    dirty_nodes, adj.clone(), weights.clone(), num_nodes, B
+                )
 
         node_feats = self.gnn(dirty_nodes, adj, weights, B, N)
         if self.pooled:
