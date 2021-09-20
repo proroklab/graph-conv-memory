@@ -50,16 +50,9 @@ class BernoulliEdge(torch.nn.Module):
             # if done in forward model does not learn...
             self.edge_network = self.build_edge_network(input_size)
         if deterministic:
-            self.sm = gcm.util.Spardmax() #SparsegenLin(0.8)
+            self.sm = gcm.util.SparsegenLin(0.8)
         else:
             self.ste = gcm.util.StraightThroughEstimator()
-
-    def sample_random_var(self, p: torch.Tensor) -> torch.Tensor:
-        """Given a probability [0,1] p, return a backprop-capable random sample"""
-        e = torch.rand(p.shape, device=p.device)
-        return torch.sigmoid(
-            torch.log(e) - torch.log(1 - e) + torch.log(p) - torch.log(1 - p)
-        )
 
     def build_edge_network(self, input_size: int) -> torch.nn.Sequential:
         """Builds a network to predict edges.
@@ -138,37 +131,6 @@ class BernoulliEdge(torch.nn.Module):
             )
         return new_adj
         """
-
-    def compute_logits2(
-        self,
-        nodes: torch.Tensor,
-        num_nodes: torch.Tensor,
-        weights: torch.Tensor,
-        B: int,
-    ):
-        """Computes edge probability between current node and all other nodes.
-        Returns a modified copy of the weight matrix containing edge probs"""
-        # No edges for a single node
-        if torch.max(num_nodes) < 1:
-            return weights
-
-        b_idxs, past_idxs, curr_idx = gcm.util.idxs_up_to_num_nodes(weights, num_nodes)
-        # curr_idx > past_idxs
-        # flows from past_idxs to j
-        # so [j, past_idxs]
-        curr_nodes = nodes[b_idxs, curr_idx]
-        past_nodes = nodes[b_idxs, past_idxs]
-
-        net_in = torch.cat((curr_nodes, past_nodes), dim=-1)
-        log_probs = self.edge_network(net_in).squeeze()
-        # TODO: weights[:,0] is not populated, why?
-        weights[b_idxs, curr_idx, past_idxs] = log_probs
-
-        if self.backward_edges:
-            net_in = torch.cat((past_nodes, curr_nodes), dim=-1)
-            weights[b_idxs, past_idxs, curr_idx] = log_probs
-
-        return weights
 
     def forward(self, nodes, adj, weights, num_nodes, B):
         """A(i,j) = Ber[phi(i || j), e]
