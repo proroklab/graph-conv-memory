@@ -10,7 +10,8 @@ class STEFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        return torch.nn.functional.hardtanh(grad_output)
+        return grad_output
+        #return torch.nn.functional.hardtanh(grad_output)
 
 class StraightThroughEstimator(torch.nn.Module):
     def __init__(self):
@@ -51,29 +52,17 @@ class Hardmax(torch.nn.Module):
 
 
 class SparsegenLin(torch.nn.Module):
-    def __init__(self, lam, data_driven=False, normalized=True):
+    def __init__(self, lam, normalized=True):
         super().__init__()
         self.lam = lam
-        self.data_driven = data_driven
         self.normalized = normalized
 
-    def forward(self, input):
-        bs = input.data.size()[0]
-        dim = input.data.size()[1]
+    def forward(self, z):
+        bs = z.data.size()[0]
+        dim = z.data.size()[1]
         # z = input.sub(torch.mean(input,dim=1).repeat(1,dim))
         dtype = torch.FloatTensor
         #z = input.type(dtype)
-        z = input
-
-        #Calculate data-driven lambda for self.data_driven = True
-        if self.data_driven:
-            z = z - torch.min(z,1)[0].view(bs,1).repeat(1,dim)
-            tausum = torch.sum(z, 1)
-            self.lam = (1 - tausum).view(bs,1).repeat(1,dim)
-            prob = z
-            if self.normalized:
-                prob = z / (1 - self.lam)
-            return prob.type(dtype)
 
         #sort z
         z_sorted = torch.sort(z, descending=True)[0]
@@ -90,7 +79,7 @@ class SparsegenLin(torch.nn.Module):
         #calculate tau(z)
         tausum = torch.sum(z_check.float() * z_sorted, 1)
         tau_z = (tausum - 1 + self.lam) / k_z
-        prob = z.sub(tau_z.view(bs,1).repeat(1,dim)).clamp(min=0).type(dtype)
+        prob = z.sub(tau_z.view(bs,1).repeat(1,dim)).clamp(min=0)
         if self.normalized:
                prob /= (1-self.lam)
         return prob
