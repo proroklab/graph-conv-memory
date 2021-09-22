@@ -5,13 +5,22 @@ class Distance(torch.nn.Module):
     """Base class for edges based on the similarity between
     latent representations"""
 
-    def __init__(self, max_distance, bidirectional=False):
+    def __init__(self, max_distance, bidirectional=False, learned=False):
         super().__init__()
         self.max_distance = max_distance
         self.bidirectional = bidirectional
+        self.learned = learned
+        if learned:
+            # Easier to scale node matrix than do comparison w/ grad
+            self.dist_param = torch.nn.Parameter(torch.Tensor([max_distance]))
+            self.max_distance = 1.0
 
     def forward(self, nodes, adj_mats, edge_weights, num_nodes, B):
         """Connect current obs to past obs based on distance of the node features"""
+
+        if self.learned:
+            nodes = nodes / self.dist_param
+
         B_idx = torch.arange(B)
         curr_nodes = nodes[B_idx, num_nodes[B_idx].squeeze()]
         dists = self.dist_fn(curr_nodes, nodes)
@@ -33,8 +42,8 @@ class Distance(torch.nn.Module):
 class EuclideanEdge(Distance):
     """Mean per-dimension euclidean distance between obs vectors"""
 
-    def __init__(self, max_distance):
-        super().__init__(max_distance)
+    def __init__(self, max_distance, learned=False):
+        super().__init__(max_distance, learned=learned)
 
     def dist_fn(self, a, b):
         return torch.cdist(a, b).mean(dim=1)
@@ -43,8 +52,8 @@ class EuclideanEdge(Distance):
 class CosineEdge(Distance):
     """Mean per-dimension cosine distance between obs vectors"""
 
-    def __init__(self, max_distance):
-        super().__init__(max_distance)
+    def __init__(self, max_distance, learned=False):
+        super().__init__(max_distance, learned=learned)
         self.cs = torch.nn.modules.distance.CosineSimilarity(dim=2)
 
     def dist_fn(self, a, b):
@@ -57,8 +66,8 @@ class SpatialEdge(Distance):
     Uses the slices a_pose_slice and b_pose_slice to extract the respective
     poses from the latent vectors"""
 
-    def __init__(self, max_distance, a_pose_slice, b_pose_slice=None):
-        super().__init__(max_distance)
+    def __init__(self, max_distance, a_pose_slice, b_pose_slice=None, learned=False):
+        super().__init__(max_distance, learned=learned)
         self.a_pose_slice = a_pose_slice
         if b_pose_slice:
             self.b_pose_slice = b_pose_slice
