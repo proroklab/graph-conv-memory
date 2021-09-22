@@ -63,6 +63,9 @@ class BernoulliEdge(torch.nn.Module):
             torch.nn.Linear(2 * input_size, input_size),
             torch.nn.ReLU(),
             torch.nn.LayerNorm(input_size),
+            torch.nn.Linear(input_size, input_size),
+            torch.nn.ReLU(),
+            torch.nn.LayerNorm(input_size),
             torch.nn.Linear(input_size, 1),
         )
 
