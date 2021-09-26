@@ -4,53 +4,35 @@ from typing import Dict, Tuple, List
 import gcm.util
 
 
-@torch.jit.script
-def up_to_num_nodes_idxs(
-    adj: torch.Tensor, num_nodes: torch.Tensor
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Given num_nodes, returns idxs from adj
-    up to but not including num_nodes. I.e.
-    [batches, 0:num_nodes, num_nodes]. Note the order is
-    sorted by (batches, num_nodes, 0:num_nodes) in ascending order"""
-    seq_lens = num_nodes.unsqueeze(-1)
-    N = adj.shape[-1]
-    N_idx = torch.arange(N, device=adj.device).unsqueeze(0)
-    N_idx = N_idx.expand(seq_lens.shape[0], N_idx.shape[1])
-    # Do not include the current node
-    N_idx = torch.nonzero(N_idx < num_nodes.unsqueeze(1))
-    assert N_idx.shape[-1] == 2
-    batch_idxs = N_idx[:, 0]
-    past_idxs = N_idx[:, 1]
-    curr_idx = num_nodes[batch_idxs]
-
-    return batch_idxs, past_idxs, curr_idx
-
 class BernoulliEdge(torch.nn.Module):
-    """Add temporal bidirectional back edge, but only if we have >1 nodes
-    E.g., node_{t} <-> node_{t-1}"""
+    """An edge selector where the prior is learned from data. An MLP 
+    computes logits which create edges via either sampling or sparsemax."""
 
     def __init__(
         self,
         input_size: int = 0,
         model: torch.nn.Sequential = None,
-        backward_edges: bool = False,
-        desired_num_edges: int = 5,
+        num_edge_samples: int = 10,
         deterministic: bool = False,
-        # gradient_scale: float = 0.5
     ):
+        """
+        input_size: Feature dim size of GNN, not required if model is specificed
+        model: Model for logits network, if not specified one is provided
+        num_edge_samples: If not deterministic, how many samples to take from dist.
+        determinstic: Whether edges are randomly sampled or argmaxed
+        """
         super().__init__()
-        self.backward_edges = backward_edges
         self.deterministic = deterministic
-        self.desired_num_edges = desired_num_edges
+        self.num_edge_samples = num_edge_samples
         assert input_size or model, "Must specify either input_size or model"
         if model:
             self.edge_network = model
         else:
             # This MUST be done here
-            # if done in forward model does not learn...
+            # if initialized in forward model does not learn...
             self.edge_network = self.build_edge_network(input_size)
         if deterministic:
-            self.sm = gcm.util.SparsegenLin(0.8)
+            self.sm = gcm.util.Spardmax()
         else:
             self.ste = gcm.util.StraightThroughEstimator()
 
@@ -78,8 +60,8 @@ class BernoulliEdge(torch.nn.Module):
     ):
         """Computes a new adjacency matrix using the edge network.
         The edge network outputs logits for all possible edges,
-        which are spardmaxed to produce edges. Edges are then
-        placed into a new adjacency matrix"""
+        which are spardmaxed or sampled to produce edges. Edges are then
+        placed into a new adjacency matrix and returned."""
         # No edges for a single node
         if torch.max(num_nodes) < 1:
             return adj
@@ -103,7 +85,7 @@ class BernoulliEdge(torch.nn.Module):
             edges = self.sm(shaped_logits)
         else:
             # Multinomial straight-thru estimator
-            gs_in = shaped_logits.unsqueeze(0).repeat(self.desired_num_edges, 1, 1)
+            gs_in = shaped_logits.unsqueeze(0).repeat(self.num_edge_samples, 1, 1)
             # int_edges in Z but we need in [0,1] -- straight thru estimator
             soft = torch.nn.functional.gumbel_softmax(gs_in, hard=True)
             edges = self.ste(soft.sum(dim=0))
@@ -112,41 +94,24 @@ class BernoulliEdge(torch.nn.Module):
         # Reindexing edges in this manner ensures even if the edge network
         # went beyond -10e20 and set an invalid edge, it will not be used
         # at most, it affects the scaling for the valid edges
-        new_adj[b_idxs, curr_idx, past_idxs] = edges[b_idxs, past_idxs]
+        # 
         # Ensure we don't overwrite 1's in adj in case we have more than one
         # edge selector
-        #new_adj = self.ste(new_adj + adj)
-        #new_adj = gcm.util.diff_or([new_adj, adj])
+        # We don't want to add the old adj to the new adj,
+        # because grads from previous rows will accumulate
+        # and grad will explode
+        new_adj[b_idxs, curr_idx, past_idxs] = self.ste(
+            edges[b_idxs, past_idxs] + adj[b_idxs, curr_idx, past_idxs]
+        )
 
         return new_adj
-
-        """
-        shaped_logits = torch.zeros_like(adj)
-        new_adj = adj.clone()
-        shaped_logits[b_idxs, curr_idx, past_idxs] = logits
-        for b in range(B):
-            if num_nodes[b] < 1:
-                continue
-            # TODO: should we multiply prev adj to care about
-            # potentially other edge selectors in the queue?
-            new_adj[b, num_nodes[b], :num_nodes[b]] = self.sm(
-                shaped_logits[b, num_nodes[b], :num_nodes[b]].unsqueeze(0)
-            )
-        return new_adj
-        """
 
     def forward(self, nodes, adj, weights, num_nodes, B):
-        """A(i,j) = Ber[phi(i || j), e]
-
-        Modify the nodes/adj_mats/state in-place by reference. Return value
-        is not used.
-        """
-
-        # a(b,i,j) = gumbel_softmax(phi(n(b,i) || n(b,j))) for i, j < num_nodes
         # First run
         if self.edge_network[0].weight.device != nodes.device:
             self.edge_network = self.edge_network.to(nodes.device)
 
+        # No self edges allowed
         if torch.max(num_nodes) < 1:
             return adj, weights
 
