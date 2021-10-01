@@ -140,7 +140,7 @@ cfg = {
     "model": {
         "custom_model": RayDenseGCM,
         "custom_model_config": {
-            "graph_size": 32,
+            "graph_size": 20,
             "gnn_input_size": hidden,
             "gnn_output_size": hidden,
             "gnn": dgc,
