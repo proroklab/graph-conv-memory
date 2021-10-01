@@ -126,8 +126,6 @@ ray.init(
 dgc = torch_geometric.nn.Sequential(
     "x, adj, weights, B, N",
     [
-        # Mean and sum aggregation perform roughly the same
-        # Preprocessor with 1 layer did not help
         (torch_geometric.nn.DenseGraphConv(hidden, hidden), "x, adj -> x"),
         (torch.nn.Tanh()),
         (torch_geometric.nn.DenseGraphConv(hidden, hidden), "x, adj -> x"),
