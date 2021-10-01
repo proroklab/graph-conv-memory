@@ -4,7 +4,7 @@ from typing import Dict, Tuple, List
 import gcm.util
 
 
-class BernoulliEdge(torch.nn.Module):
+class LearnedEdge(torch.nn.Module):
     """An edge selector where the prior is learned from data. An MLP 
     computes logits which create edges via either sampling or sparsemax."""
 
@@ -33,8 +33,7 @@ class BernoulliEdge(torch.nn.Module):
             self.edge_network = self.build_edge_network(input_size)
         if deterministic:
             self.sm = gcm.util.Spardmax()
-        else:
-            self.ste = gcm.util.StraightThroughEstimator()
+        self.ste = gcm.util.StraightThroughEstimator()
 
     def build_edge_network(self, input_size: int) -> torch.nn.Sequential:
         """Builds a network to predict edges.
