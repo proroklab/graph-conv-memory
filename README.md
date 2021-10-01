@@ -102,6 +102,11 @@ gcm.edge_selectors.distance.SpatialEdge
 #
 # You can also implement the identity priors using this by setting
 # max_distance to something like 1e-6
+
+gcm.edge_selectors.learned.LearnedEdge
+# Learn an edge function from the data
+# Will randomly sample edges and train thru gradient descent
+# call the constructor with the output size of your GNN
 ```
 
 ## Ray Quickstart (WIP)
