@@ -8,7 +8,8 @@ from gcm.gcm import DenseGCM, DenseToSparse, SparseToDense, PositionalEncoding
 from gcm.edge_selectors.temporal import TemporalBackedge
 from gcm.edge_selectors.distance import EuclideanEdge, CosineEdge, SpatialEdge
 from gcm.edge_selectors.dense import DenseEdge
-from gcm.edge_selectors.bernoulli import BernoulliEdge, sample_hard, diff_or, diff_or2
+from gcm.edge_selectors.bernoulli import BernoulliEdge
+from gcm.util import diff_or, diff_or2
 
 
 class TestPositionalEncoding(unittest.TestCase):
@@ -233,7 +234,7 @@ class TestGCMDirection(unittest.TestCase):
         # neighbor
         # flows from 3 => 0, neighbor => root
         # root = i, neighbor = j
-        # j should be < i
+        # i should be > j in adj[i, j]
         desired = torch.arange(3 * 11, 4 * 11, dtype=torch.float)
         if not torch.all(self.nodes[0, 3] == desired):
             self.fail(f"{self.nodes[0,3]} != {desired}")
@@ -573,7 +574,7 @@ class TestTemporalEdge(unittest.TestCase):
             batches, N, feats
         )
         self.obs = torch.ones(batches, feats)
-        self.adj = torch.zeros(batches, N, N, dtype=torch.long)
+        self.adj = torch.zeros(batches, N, N)
         self.weights = torch.ones(batches, N, N)
         self.num_nodes = torch.zeros(batches, dtype=torch.long)
 
@@ -614,6 +615,18 @@ class TestTemporalEdge(unittest.TestCase):
         tgt_adj[:, 9, 5] = 1
         if torch.any(tgt_adj != adj):
             self.fail(f"{tgt_adj} != {adj}")
+
+    def test_learned_edge_grad(self):
+        self.s = DenseGCM(self.g, edge_selectors=TemporalBackedge(learned=True))
+        self.num_nodes += 1
+        _, (nodes, adj, weights, num_nodes) = self.s(
+            self.obs, (self.nodes, self.adj, self.weights, self.num_nodes)
+        )
+        if not adj.requires_grad:
+            self.fail("Adj has no grad")
+
+        adj.sum().backward()
+
 
 
 class TestDoubleEdge(unittest.TestCase):
@@ -724,6 +737,28 @@ class TestDistanceEdge(unittest.TestCase):
             self.obs, (self.nodes, self.adj, self.weights, self.num_nodes)
         )
 
+    def test_learned_edge(self):
+        self.s = DenseGCM(self.g, edge_selectors=EuclideanEdge(max_distance=1, learned=True))
+        self.obs = torch.ones_like(self.obs)
+
+        _, (nodes, adj, weights, num_nodes) = self.s(
+            self.obs, (self.nodes, self.adj, self.weights, self.num_nodes)
+        )
+        tgt_adj = torch.zeros_like(adj, dtype=torch.long)
+        # Adds self edge
+        if torch.any(tgt_adj != adj):
+            self.fail(f"{tgt_adj} != {self.adj}")
+
+    def test_learned_edge_grad(self):
+        e = EuclideanEdge(max_distance=1, learned=True)
+        self.num_nodes += 2
+
+        adj, weights = e(self.nodes, self.adj, self.weights, self.num_nodes, B=5)
+
+        if not self.nodes.requires_grad:
+            self.fail(f"Nodes has no grad")
+
+
 
 class TestDenseEdge(unittest.TestCase):
     def setUp(self):
@@ -806,6 +841,27 @@ class TestBernoulliEdge(unittest.TestCase):
         self.adj = torch.zeros(batches, N, N)
         self.weights = torch.ones(batches, N, N)
         self.num_nodes = torch.zeros(batches, dtype=torch.long)
+
+    def test_compute_new_adj_deterministic_grad(self):
+        self.num_nodes = torch.tensor((2,3), dtype=torch.long)
+        es = BernoulliEdge(5, deterministic=True)
+        self.nodes.requires_grad=True
+        adj, weights = es(self.nodes, self.adj, self.weights, self.num_nodes, 2)
+
+        self.assertTrue(adj.requires_grad)
+
+    def test_compute_new_adj_grad(self):
+        p = torch.nn.Parameter(torch.tensor([1.0]))
+        self.nodes = self.nodes * p
+        self.num_nodes = torch.tensor((2,3), dtype=torch.long)
+        es = BernoulliEdge(5, deterministic=False)
+        adj, weights = es(self.nodes, self.adj, self.weights, self.num_nodes, 2)
+
+        self.assertTrue(adj.requires_grad)
+        optimizer = torch.optim.Adam(es.parameters(), lr=0.005)
+        self.nodes.sum().backward()
+        optimizer.step()
+        grads = [p.grad for p in es.parameters()]
 
     def test_diff_or(self):
         test = [(torch.rand(32,128,128) > 0.5).float() for i in range(3)]

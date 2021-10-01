@@ -12,7 +12,7 @@ class BernoulliEdge(torch.nn.Module):
         self,
         input_size: int = 0,
         model: torch.nn.Sequential = None,
-        num_edge_samples: int = 10,
+        num_edge_samples: int = 5,
         deterministic: bool = False,
     ):
         """
