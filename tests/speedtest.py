@@ -61,11 +61,12 @@ def sparse():
     )
     #edge_list = torch.stack((torch.arange(0,126), torch.arange(1,127)))
     obs_stack = obs.unsqueeze(1).repeat(1,tau,1)
+    taus = torch.ones(batches, dtype=torch.long) * tau
     s = time.time()
     hidden = None
     out = None
     l = torch.tensor([0.])
-    out, hidden = dgcm(obs_stack, hidden)
+    out, hidden = dgcm(obs_stack, taus, hidden)
     l += out.sum()
     l.backward()
     e = time.time()

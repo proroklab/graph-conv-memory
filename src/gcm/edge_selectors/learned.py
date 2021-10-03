@@ -38,7 +38,7 @@ class LearnedEdge(torch.nn.Module):
     def build_edge_network(self, input_size: int) -> torch.nn.Sequential:
         """Builds a network to predict edges.
         Network input: (i || j)
-        Network output: p(edge) in [0,1]
+        Network output: logits(edge(i,j))
         """
         return torch.nn.Sequential(
             torch.nn.Linear(2 * input_size, input_size),

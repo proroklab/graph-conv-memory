@@ -70,13 +70,14 @@ class SparseGCM(torch.nn.Module):
     def forward(
         self, 
         x: TensorType["B","tau","feat"],
+        taus: TensorType["B"],             # sequence_lengths
         hidden: Union[
             None, 
             Tuple[
                 TensorType["B", "N", "feats"], # Nodes
                 TensorType["B", 2, "E"],       # Edges
                 TensorType["B", 1, "E"],       # Weights
-                TensorType["B"]                # T
+                TensorType["B"],               # T
             ]
         ]
     ) -> Tuple[
@@ -103,10 +104,13 @@ class SparseGCM(torch.nn.Module):
 
         N = nodes.shape[1]
         B = x.shape[0]
-        tau = x.shape[1]
+        # tau = x.shape[1]
         # Batch and time idxs for nodes we intend to add
-        B_idxs = torch.arange(B, device=x.device).repeat_interleave(tau)
-        tau_idxs = torch.cat([torch.arange(t, t + tau, device=x.device) for t in T])
+        # TODO: tau is variable per-input (seq_len in rllib), not a single value
+        # B_idxs are
+        #B_idxs = torch.arange(B, device=x.device).repeat_interleave(tau)
+        B_idxs = torch.cat([torch.ones(taus[b], device=x.device, dtype=torch.long) * b for b in range(B)])
+        tau_idxs = torch.cat([torch.arange(T[b], T[b] + taus[b], device=x.device) for b in range(B)])
 
         nodes = nodes.clone()
         # Add new nodes to the current graph
@@ -119,7 +123,7 @@ class SparseGCM(torch.nn.Module):
         dirty_nodes = nodes.clone()
         if self.edge_selectors:
             edges, weights = self.edge_selectors(
-                dirty_nodes, edges, weights, T, tau
+                dirty_nodes, edges, weights, T, taus
             )
 
         # Thru network
@@ -136,7 +140,7 @@ class SparseGCM(torch.nn.Module):
         # it expects batch=[Batch], x=[Batch,feats], edge=[2, ?}
         datalist = []
         for b in range(B):
-            data_x = dirty_nodes[b, :T[b] + tau]
+            data_x = dirty_nodes[b, :T[b] + taus[b]]
             # Get only valid edges (-1 signifies invalid edge)
             mask = edges[b] > -1
             # Delete nonvalid edge pairs
@@ -153,7 +157,7 @@ class SparseGCM(torch.nn.Module):
             torch.isfinite(mx)
         ), "Got NaN in returned memory, try using tanh activation"
 
-        T = T + tau
+        T = T + taus
         return mx, (nodes, edges, weights, T)
 
     def wrap_overflow(self, nodes, adj, weights, num_nodes):
