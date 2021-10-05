@@ -103,13 +103,25 @@ class Spardgen(torch.nn.Module):
 
     
 
+def get_batch_and_tau_idxs(T, taus, B):
+    """Given T and tau tensors, return indices matching batches to taus.
+    These tell us which elements in the node matrix we are allowed to use,
+    and organize them by batch. 
+
+    E.g. 
+    g_idxs = torch.where(B_idxs == 0)
+    zeroth_graph = nodes[B_idxs[g_idxs], tau_idxs[g_idxs]] 
+    """
+    B_idxs = torch.cat([torch.ones(taus[b], device=T.device, dtype=torch.long) * b for b in range(B)])
+    tau_idxs = torch.cat([torch.arange(T[b], T[b] + taus[b], device=T.device) for b in range(B)])
+    return B_idxs, tau_idxs
 
 @torch.jit.script
 def diff_or(tensors: List[torch.Tensor]):
     """Differentiable OR operation bewteen n-tuple of tensors
     Input: List[tensors in {0,1}]
     Output: tensor in {0,1}"""
-    raise NotImplementedError("This seems to dilute gradients, dont use it")
+    print("This seems to dilute gradients, dont use it")
     res = torch.zeros_like(tensors[0])
     for t in tensors:
         tmp = res.clone()
@@ -122,7 +134,7 @@ def diff_or2(tensors: List[torch.Tensor]):
     """Differentiable OR operation bewteen n-tuple of tensors
     Input: List[tensors in {0,1}]
     Output: tensor in {0,1}"""
-    raise NotImplementedError("This seems to dilute gradients, dont use it")
+    print("This seems to dilute gradients, dont use it")
     # This nice form is actually slower than the matrix mult form
     return 1 - (1 - torch.stack(tensors, dim=0)).prod(dim=0)
 

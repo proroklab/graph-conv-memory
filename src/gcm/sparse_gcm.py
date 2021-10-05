@@ -1,5 +1,6 @@
 import torch
 import torch_geometric
+from gcm import util
 from typing import Union, Tuple, List
 
 from torchtyping import TensorType, patch_typeguard
@@ -89,11 +90,11 @@ class SparseGCM(torch.nn.Module):
                 TensorType["B"]                 # T
             ]
         ]:
-        """Add a memory x to the graph, and query the memory for it.
+        """Add a memory x with temporal size tau to the graph, and query the memory for it.
         B = batch size
         N = maximum graph size
         T = number of timesteps in graph before input
-        tau = number of timesteps in input
+        taus = number of timesteps in each input batch
         E = number of edge pairs
         """
         # Base case
@@ -104,13 +105,8 @@ class SparseGCM(torch.nn.Module):
 
         N = nodes.shape[1]
         B = x.shape[0]
-        # tau = x.shape[1]
         # Batch and time idxs for nodes we intend to add
-        # TODO: tau is variable per-input (seq_len in rllib), not a single value
-        # B_idxs are
-        #B_idxs = torch.arange(B, device=x.device).repeat_interleave(tau)
-        B_idxs = torch.cat([torch.ones(taus[b], device=x.device, dtype=torch.long) * b for b in range(B)])
-        tau_idxs = torch.cat([torch.arange(T[b], T[b] + taus[b], device=x.device) for b in range(B)])
+        B_idxs, tau_idxs = util.get_batch_and_tau_idxs(T, taus, B)
 
         nodes = nodes.clone()
         # Add new nodes to the current graph
@@ -133,7 +129,7 @@ class SparseGCM(torch.nn.Module):
             dirty_nodes = self.positional_encoder(dirty_nodes)
         if self.aux_edge_selectors:
             edges, weights = self.edge_selectors(
-                dirty_nodes, edges, weights, T, tau, B
+                dirty_nodes, edges, weights, T, taus, B
             )
 
         # We need to convert to GNN input format

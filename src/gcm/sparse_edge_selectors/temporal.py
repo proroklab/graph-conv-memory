@@ -19,16 +19,20 @@ class TemporalEdge(torch.nn.Module):
             edges: TensorType["B", 2, "E", int],
             weights: Union[None, TensorType["batch", 1, "E", float]],
             T: TensorType["B", int], 
-            tau: int,
+            taus: TensorType["B", int],
     ) -> Tuple[
             TensorType["B", 2, "NE", int], 
             TensorType["B", 1, "NE", float]
         ]:
         # Connect each [t in T to T + tau] to [t - h for h in hops]
         # shape [B, t + tau]
-        edge_base = torch.stack([torch.arange(t, t + tau, device=nodes.device) for t in T]) 
+        #edge_base = torch.stack([torch.arange(t, t + tau, device=nodes.device) for t in T]) 
+        # shape [B, ?]
+        edge_base = torch.cat([torch.arange(T[b], T[b] + taus[b], device=x.device) for b in range(B)])
         # shape [B, t + tau, hops]
-        edge_ends = edge_base.unsqueeze(-1).repeat(1,1, len(self.hops)) 
+        #edge_ends = edge_base.unsqueeze(-1).repeat(1,1, len(self.hops)) 
+        import pdb; pdb.set_trace()
+        edge_ends = edge_base.unsqueeze(-1).repeat(1, len(self.hops)) 
         # shape [B, t + tau, hops]
         edge_starts = edge_ends - self.hops
         # flatten
