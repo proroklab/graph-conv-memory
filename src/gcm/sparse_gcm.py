@@ -147,7 +147,7 @@ class SparseGCM(torch.nn.Module):
         batch = torch_geometric.data.Batch.from_data_list(datalist)
         node_feats = self.gnn(batch.x, batch.edge_index)
         '''
-        flat_nodes, flat_edges, output_node_idxs = util.to_batch(dirty_nodes, edges, T, taus, B)
+        flat_nodes, flat_edges, output_node_idxs = util.to_batch(dirty_nodes, edges, weights, T, taus, B)
         node_feats = self.gnn(flat_nodes, flat_edges)
         # Extract the hidden repr at the new nodes
         # Each mx is variable in temporal dim, so return 2D tensor of [B*tau, feat]

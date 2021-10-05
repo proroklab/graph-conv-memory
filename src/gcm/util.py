@@ -1,4 +1,5 @@
 import torch
+import torch_geometric
 import sparsemax
 from typing import Tuple, List
 
@@ -133,8 +134,8 @@ def get_valid_node_idxs(T, taus, B):
 
 
 
-def to_batch(nodes, edges, T, taus, B):
-    """Squeeze node and edge batch dimensions into a single
+def to_batch(nodes, edges, weights, T, taus, B):
+    """Squeeze node, edge, and weight batch dimensions into a single
     huge graph. Also deletes non-valid edge pairs"""
     b_idx = torch.arange(B, device=nodes.device)
     # Initial offset is zero, not T + tau, roll into place
@@ -152,6 +153,10 @@ def to_batch(nodes, edges, T, taus, B):
     # Careful, mask select will automatically flatten
     # so do it last, this squeezes from from (2,B,NE) => (2,B*NE)
     flat_edges = edges.permute(1,0,2).masked_select(stacked_mask).reshape(2,-1)
+    # Do the same with weights, which will be of size E
+    flat_weights = weights.permute(1,0,2).masked_select(stacked_mask[0]).flatten()
+    # Finally, remove duplicate edges and weights
+    flat_edges, flat_weights = torch_geometric.utils.coalesce(flat_edges, flat_weights)
 
     # Flatten nodes
     B_idxs, tau_idxs = get_valid_node_idxs(T, taus, B)
