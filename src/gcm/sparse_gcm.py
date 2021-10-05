@@ -106,7 +106,7 @@ class SparseGCM(torch.nn.Module):
         N = nodes.shape[1]
         B = x.shape[0]
         # Batch and time idxs for nodes we intend to add
-        B_idxs, tau_idxs = util.get_batch_and_tau_idxs(T, taus, B)
+        B_idxs, tau_idxs = util.get_new_node_idxs(T, taus, B)
 
         nodes = nodes.clone()
         # Add new nodes to the current graph
@@ -134,6 +134,7 @@ class SparseGCM(torch.nn.Module):
 
         # We need to convert to GNN input format
         # it expects batch=[Batch], x=[Batch,feats], edge=[2, ?}
+        '''
         datalist = []
         for b in range(B):
             data_x = dirty_nodes[b, :T[b] + taus[b]]
@@ -145,9 +146,12 @@ class SparseGCM(torch.nn.Module):
             datalist.append(torch_geometric.data.Data(x=data_x, edge_index=data_edge))
         batch = torch_geometric.data.Batch.from_data_list(datalist)
         node_feats = self.gnn(batch.x, batch.edge_index)
-        #node_feats = self.gnn(dirty_nodes, edges)
+        '''
+        flat_nodes, flat_edges, output_node_idxs = util.to_batch(dirty_nodes, edges, T, taus, B)
+        node_feats = self.gnn(flat_nodes, flat_edges)
         # Extract the hidden repr at the new nodes
-        mx = node_feats[B_idxs, tau_idxs] 
+        # Each mx is variable in temporal dim, so return 2D tensor of [B*tau, feat]
+        mx = node_feats[output_node_idxs]
 
         assert torch.all(
             torch.isfinite(mx)

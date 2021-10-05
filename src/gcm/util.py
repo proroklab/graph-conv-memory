@@ -103,18 +103,77 @@ class Spardgen(torch.nn.Module):
 
     
 
-def get_batch_and_tau_idxs(T, taus, B):
+def get_new_node_idxs(T, taus, B):
     """Given T and tau tensors, return indices matching batches to taus.
-    These tell us which elements in the node matrix we are allowed to use,
+    These tell us which elements in the node matrix we have just added
+    during this iteration, and organize them by batch. 
+
+    E.g. 
+    g_idxs = torch.where(B_idxs == 0)
+    zeroth_graph_new_nodes = nodes[B_idxs[g_idxs], tau_idxs[g_idxs]] 
+    """
+    # TODO: batch this using b_idx and cumsum
+    B_idxs = torch.cat([torch.ones(taus[b], device=T.device, dtype=torch.long) * b for b in range(B)])
+    tau_idxs = torch.cat([torch.arange(T[b], T[b] + taus[b], device=T.device) for b in range(B)])
+    return B_idxs, tau_idxs
+
+def get_valid_node_idxs(T, taus, B):
+    """Given T and tau tensors, return indices matching batches to taus.
+    These tell us which elements in the node matrix are valid for convolution,
     and organize them by batch. 
 
     E.g. 
     g_idxs = torch.where(B_idxs == 0)
-    zeroth_graph = nodes[B_idxs[g_idxs], tau_idxs[g_idxs]] 
+    zeroth_graph_all_nodes = nodes[B_idxs[g_idxs], tau_idxs[g_idxs]] 
     """
-    B_idxs = torch.cat([torch.ones(taus[b], device=T.device, dtype=torch.long) * b for b in range(B)])
-    tau_idxs = torch.cat([torch.arange(T[b], T[b] + taus[b], device=T.device) for b in range(B)])
+    # TODO: batch this using b_idx and cumsum
+    B_idxs = torch.cat([torch.ones(T[b] + taus[b], device=T.device, dtype=torch.long) * b for b in range(B)])
+    tau_idxs = torch.cat([torch.arange(0, T[b] + taus[b], device=T.device) for b in range(B)])
     return B_idxs, tau_idxs
+
+
+
+def to_batch(nodes, edges, T, taus, B):
+    """Squeeze node and edge batch dimensions into a single
+    huge graph. Also deletes non-valid edge pairs"""
+    b_idx = torch.arange(B, device=nodes.device)
+    # Initial offset is zero, not T + tau, roll into place
+    batch_offsets = (T + taus).cumsum(dim=0).roll(1,0)
+    batch_offsets[0] = 0
+
+    # Flatten edges
+    num_flat_edges = edges[b_idx].shape[-1]
+    edge_offsets = batch_offsets.unsqueeze(-1).unsqueeze(-1).expand(-1,2,num_flat_edges)
+    offset_edges = edges + edge_offsets
+    # Filter invalid edges (those that were < 0 originally)
+    # Swap dims (B,2,NE) => (2,B,NE)
+    mask = (offset_edges < edge_offsets).permute(1,0,2)
+    stacked_mask = (mask[0] & mask[1]).unsqueeze(0).expand(2,-1,-1)
+    # Careful, mask select will automatically flatten
+    # so do it last, this squeezes from from (2,B,NE) => (2,B*NE)
+    flat_edges = edges.permute(1,0,2).masked_select(stacked_mask).reshape(2,-1)
+
+    # Flatten nodes
+    B_idxs, tau_idxs = get_valid_node_idxs(T, taus, B)
+    flat_nodes = nodes[B_idxs, tau_idxs]
+    # Extracting belief requires batch-tau indices (newly inserted nodes)
+    # return these too
+    # Flat nodes are ordered B,:T+tau (all valid nodes)
+    # We want B,T:T+tau (new nodes), which is batch_offsets:batch_offsets + tau
+    output_node_idxs = torch.cat([torch.arange(batch_offsets[b], batch_offsets[b] + taus[b]) for b in range(B)])
+
+    return flat_nodes, flat_edges, output_node_idxs
+
+    datalist = []
+    for b in range(B):
+        data_x = dirty_nodes[b, :T[b] + taus[b]]
+        # Get only valid edges (-1 signifies invalid edge)
+        mask = edges[b] > -1
+        # Delete nonvalid edge pairs
+        data_edge = edges[b, :, mask[0] & mask[1]]
+        #data_edge = edges[b][edges[b] > -1].reshape(2,-1) #< T[b] + tau]
+        datalist.append(torch_geometric.data.Data(x=data_x, edge_index=data_edge))
+    batch = torch_geometric.data.Batch.from_data_list(datalist)
 
 @torch.jit.script
 def diff_or(tensors: List[torch.Tensor]):
