@@ -165,7 +165,13 @@ def to_batch(nodes, edges, weights, T, taus, B):
     # return these too
     # Flat nodes are ordered B,:T+tau (all valid nodes)
     # We want B,T:T+tau (new nodes), which is batch_offsets:batch_offsets + tau
-    output_node_idxs = torch.cat([torch.arange(batch_offsets[b], batch_offsets[b] + taus[b]) for b in range(B)])
+    output_node_idxs = torch.cat(
+        [
+            torch.arange(
+                batch_offsets[b], batch_offsets[b] + taus[b], device=nodes.device
+            ) for b in range(B)
+        ]
+    )
 
     return flat_nodes, flat_edges, output_node_idxs
 
