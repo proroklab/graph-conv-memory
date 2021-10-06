@@ -173,7 +173,7 @@ def to_batch(nodes, edges, weights, T, taus, B):
         ]
     )
 
-    return flat_nodes, flat_edges, output_node_idxs
+    return flat_nodes, flat_edges, flat_weights, output_node_idxs
 
     datalist = []
     for b in range(B):
