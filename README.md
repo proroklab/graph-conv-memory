@@ -7,7 +7,7 @@ If you use GCM, please cite the paper!
 ```
 @article{morad2021graph,
   title={Graph Convolutional Memory using Topological Priors},
-  author={Morad, Steven D and Liwicki, Stephan and Prorok, Amanda},
+  author={Morad, Steven D and Liwicki, Stephan and Kortvelesy, Ryan and Mecca, Roberto and Prorok, Amanda},
   journal={arXiv preprint arXiv:2106.14117},
   year={2021}
 }
