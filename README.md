@@ -46,25 +46,34 @@ from gcm.edge_selectors.temporal import TemporalBackedge
 # the oldest observations will be overwritten with newer observations. Reduce this number to
 # reduce memory usage.
 graph_size = 128
+
 # Define the GNN used in GCM. The following is the one used in the paper
 # Make sure you define the first layer to match your observation space
+class GNN(torch.nn.Module):
+    """A simple two-layer graph neural network"""
+    def __init__(self, obs_size, hidden_size=32):
+        super().__init__()
+        self.gc0 = torch_geometric.nn.DenseGraphConv(obs_size, hidden_size)
+        self.gc1 = torch_geometric.nn.DenseGraphConv(hidden_size, hidden_size)
+        self.act = torch.nn.Tanh()
+
+    def forward(self, x, adj, weights, B, N):
+        x = self.act(self.gc0(x, adj))
+        return self.act(self.gc1(x, adj))
+
+# Build GNN that GCM uses internally
 obs_size = 8
-our_gnn = torch_geometric.nn.Sequential(
-    "x, adj, weights, B, N",
-    [
-        (torch_geometric.nn.DenseGraphConv(obs_size, 32), "x, adj -> x"),
-        (torch.nn.Tanh()),
-        (torch_geometric.nn.DenseGraphConv(32, 32), "x, adj -> x"),
-        (torch.nn.Tanh()),
-    ],
-)
+gnn = GNN(obs_size)
 # Create the GCM using our GNN and edge selection criteria. TemporalBackedge([1]) will link observation o_t to o_{t-1}.
 # See `gcm.edge_selectors` for different kinds of priors suitable for your specific problem. Do not be afraid to implement your own!
-gcm = DenseGCM(our_gnn, edge_selectors=TemporalBackedge([1]), graph_size=graph_size)
+gcm = DenseGCM(gnn, edge_selectors=TemporalBackedge([1]), graph_size=graph_size)
 
 # If the hidden state m_t is None, GCM will initialize one for you
 # only do this at the beginning, as GCM must track and update the hidden
 # state to function correctly
+#
+# You can inspect m_t, as it is just a graph of observations
+# the first element is the node feature matrix and the second is the adjacency matrix
 m_t = None
 
 for t in train_timestep:
@@ -122,21 +131,25 @@ from ray import tune
 from gcm.ray_gcm import RayDenseGCM
 from gcm.edge_selectors.temporal import TemporalBackedge
 
+class GNN(torch.nn.Module):
+    """A simple two-layer graph neural network"""
+    def __init__(self, obs_size, hidden_size=32):
+        super().__init__()
+        self.gc0 = torch_geometric.nn.DenseGraphConv(obs_size, hidden_size)
+        self.gc1 = torch_geometric.nn.DenseGraphConv(hidden_size, hidden_size)
+        self.act = torch.nn.Tanh()
 
-hidden = 32
+    def forward(self, x, adj, weights, B, N):
+        x = self.act(self.gc0(x, adj))
+        return self.act(self.gc1(x, adj))
+
+
 ray.init(
     local_mode=True,
     object_store_memory=3e10,
 )
-dgc = torch_geometric.nn.Sequential(
-    "x, adj, weights, B, N",
-    [
-        (torch_geometric.nn.DenseGraphConv(hidden, hidden), "x, adj -> x"),
-        (torch.nn.Tanh()),
-        (torch_geometric.nn.DenseGraphConv(hidden, hidden), "x, adj -> x"),
-        (torch.nn.Tanh()),
-    ],
-)
+input_size = 16 
+hidden_size = 32
 cfg = {
     "framework": "torch",
     "num_gpus": 0,
@@ -146,9 +159,11 @@ cfg = {
         "custom_model": RayDenseGCM,
         "custom_model_config": {
             "graph_size": 20,
-            "gnn_input_size": hidden,
-            "gnn_output_size": hidden,
-            "gnn": dgc,
+             # GCM Ray wrapper will automatically convert observation
+             # to gnn_input_size using a linear layer
+            "gnn_input_size": input_size,
+            "gnn_output_size": hidden_size,
+            "gnn": GNN(input_size),
             "edge_selectors": TemporalBackedge([1]),
             "edge_weights": False,
         }
