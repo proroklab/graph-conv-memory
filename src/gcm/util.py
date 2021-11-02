@@ -101,7 +101,14 @@ class Spardgen(torch.nn.Module):
         y_hard = (y_soft != 0).float()
         return y_hard - y_soft.detach() + y_soft
 
-
+def get_nonpadded_idxs(T, taus, B):
+    """Get the non-padded indices of a zero-padded
+    batch of observations. In other words, get only valid elements and discard
+    the meaningless zeros."""
+    dense_B_idxs = torch.cat([torch.ones(taus[b], device=T.device, dtype=torch.long) * b for b in range(B)])
+    # These must not be offset by T like get_new_node_idxs
+    dense_tau_idxs = torch.cat([torch.arange(taus[b], device=T.device) for b in range(B)])
+    return dense_B_idxs, dense_tau_idxs
     
 
 def get_new_node_idxs(T, taus, B):
@@ -132,7 +139,18 @@ def get_valid_node_idxs(T, taus, B):
     tau_idxs = torch.cat([torch.arange(0, T[b] + taus[b], device=T.device) for b in range(B)])
     return B_idxs, tau_idxs
 
+def to_dense(mx, T, taus, B):
+    """Compute the dense version of mx.
 
+    The output of sparse_gcm.forward returns mx of shape
+    [B*taus, feat]. But in some cases (like rllib) we want
+    to return a zero-padded tensor of shape [B, max(taus), feat]
+    instead. This fn returns a zero-padded version of said tensor."""
+    dense_B_idxs, dense_tau_idxs = get_nonpadded_idxs(T, taus, B)
+    dense_mx = torch.zeros((B, taus.max(), mx.shape[-1]), device=mx.device)
+    dense_mx[dense_B_idxs, dense_tau_idxs] = mx
+
+    return dense_mx
 
 def to_batch(nodes, edges, weights, T, taus, B):
     """Squeeze node, edge, and weight batch dimensions into a single
@@ -148,15 +166,19 @@ def to_batch(nodes, edges, weights, T, taus, B):
     offset_edges = edges + edge_offsets
     # Filter invalid edges (those that were < 0 originally)
     # Swap dims (B,2,NE) => (2,B,NE)
-    mask = (offset_edges < edge_offsets).permute(1,0,2)
+    mask = (offset_edges >= edge_offsets).permute(1,0,2)
     stacked_mask = (mask[0] & mask[1]).unsqueeze(0).expand(2,-1,-1)
     # Careful, mask select will automatically flatten
     # so do it last, this squeezes from from (2,B,NE) => (2,B*NE)
+    if edges.numel() != stacked_mask.numel():
+        import pdb; pdb.set_trace()
     flat_edges = edges.permute(1,0,2).masked_select(stacked_mask).reshape(2,-1)
     # Do the same with weights, which will be of size E
     flat_weights = weights.permute(1,0,2).masked_select(stacked_mask[0]).flatten()
     # Finally, remove duplicate edges and weights
-    flat_edges, flat_weights = torch_geometric.utils.coalesce(flat_edges, flat_weights)
+    # but only if we have edges
+    if flat_edges.numel() > 0:
+        flat_edges, flat_weights = torch_geometric.utils.coalesce(flat_edges, flat_weights)
 
     # Flatten nodes
     B_idxs, tau_idxs = get_valid_node_idxs(T, taus, B)

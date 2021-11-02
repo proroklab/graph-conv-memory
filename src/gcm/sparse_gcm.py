@@ -30,6 +30,10 @@ class SparseGCM(torch.nn.Module):
         aux_edge_selectors: torch.nn.Module = None,
         # Maximum number of nodes in the graph
         graph_size: int = 128,
+        # Whether to pad edges so they are always a constant size
+        pad_edges: bool = True,
+        # Max edges per batch, only used if pad_edges is set
+        max_edges: int = int(1e5),
         # Whether the gnn outputs graph_size nodes or uses global pooling
         pooled: bool = False,
         # Whether to add sin/cos positional encoding like in transformer
@@ -45,6 +49,8 @@ class SparseGCM(torch.nn.Module):
         self.preprocessor = preprocessor
         self.gnn = gnn
         self.graph_size = graph_size
+        self.max_edges = max_edges
+        self.pad_edges = pad_edges
         self.edge_selectors = edge_selectors
         self.aux_edge_selectors = aux_edge_selectors
         self.pooled = pooled
@@ -70,7 +76,7 @@ class SparseGCM(torch.nn.Module):
     @typechecked
     def forward(
         self, 
-        x: TensorType["B","tau","feat"],
+        x: TensorType["B","t","feat"],
         taus: TensorType["B"],             # sequence_lengths
         hidden: Union[
             None, 
@@ -95,6 +101,7 @@ class SparseGCM(torch.nn.Module):
         N = maximum graph size
         T = number of timesteps in graph before input
         taus = number of timesteps in each input batch
+        t = the zero-padded time dimension (i.e. max(taus))
         E = number of edge pairs
         """
         # Base case
@@ -107,12 +114,18 @@ class SparseGCM(torch.nn.Module):
         B = x.shape[0]
         # Batch and time idxs for nodes we intend to add
         B_idxs, tau_idxs = util.get_new_node_idxs(T, taus, B)
+        dense_B_idxs, dense_tau_idxs = util.get_nonpadded_idxs(T, taus, B)
 
         nodes = nodes.clone()
         # Add new nodes to the current graph
         # TODO CRITICAL: Ensure edges are ALWAYS flowing past to future
         # or this shit breaks
-        nodes[B_idxs, tau_idxs] = x.reshape(-1, x.shape[-1])
+        # TODO: 
+        if tau_idxs.max() >= N:
+            raise Exception('Overflow')
+
+        nodes[B_idxs, tau_idxs] = x[dense_B_idxs, dense_tau_idxs]
+
         # We do not want to modify graph nodes in the GCM
         # Do all mutation operations on dirty_nodes, 
         # then use clean nodes in the graph state
@@ -156,6 +169,12 @@ class SparseGCM(torch.nn.Module):
         assert torch.all(
             torch.isfinite(mx)
         ), "Got NaN in returned memory, try using tanh activation"
+
+        # Fix for ray, edges must be constant size
+        if self.pad_edges:
+            unpadded_edges = edges
+            edges = torch.ones(edges.shape[0], edges.shape[1], self.max_edges) * -1
+            edges[:,:, :edges.shape[-1]] = edges
 
         T = T + taus
         return mx, (nodes, edges, weights, T)
