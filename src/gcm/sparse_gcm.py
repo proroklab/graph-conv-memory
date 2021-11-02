@@ -33,7 +33,7 @@ class SparseGCM(torch.nn.Module):
         # Whether to pad edges so they are always a constant size
         pad_edges: bool = True,
         # Max edges per batch, only used if pad_edges is set
-        max_edges: int = int(1e5),
+        max_edges: int = int(1e4),
         # Whether the gnn outputs graph_size nodes or uses global pooling
         pooled: bool = False,
         # Whether to add sin/cos positional encoding like in transformer
@@ -112,6 +112,9 @@ class SparseGCM(torch.nn.Module):
 
         N = nodes.shape[1]
         B = x.shape[0]
+
+        self.node_cleanup(nodes)
+
         # Batch and time idxs for nodes we intend to add
         B_idxs, tau_idxs = util.get_new_node_idxs(T, taus, B)
         dense_B_idxs, dense_tau_idxs = util.get_nonpadded_idxs(T, taus, B)
@@ -172,12 +175,36 @@ class SparseGCM(torch.nn.Module):
 
         # Fix for ray, edges must be constant size
         if self.pad_edges:
+            self.edge_cleanup(edges)
             unpadded_edges = edges
+            # Pad edges with -1 (-1 is treated as invalid in GCM)
             edges = torch.ones(edges.shape[0], edges.shape[1], self.max_edges) * -1
             edges[:,:, :edges.shape[-1]] = edges
 
         T = T + taus
         return mx, (nodes, edges, weights, T)
+
+    # TODO: implement
+    def node_cleanup(self, nodes):
+        """Call this when the node matrix if full, so we can erase old
+        nodes to add new nodes"""
+        return
+        overflow_mask = T + taus > graph_size
+        overflowing_batches = overflow_mask.nonzero().squeeze()
+        nodes[overflowing_batches, 0] = 0
+
+    # TODO: implement
+    def edge_cleanup(self, edges):
+        """Call this when the edge matrix is full, so we can erase old
+        edges to add new edges"""
+        # Remove edges over the limit
+        return
+        overflow_mask = edges.shape[-1]
+        if torch.any(unpadded_edges.shape[-1] > self.max_edges):
+            overflow = unpadded_edges.shape[-1] - self.max_edges
+            print('Warning: edge overflow, truncating {overflow} edge pairs from front')
+            unpadded_edges = unpadded_edges[:,:,overflow:]
+        
 
     def wrap_overflow(self, nodes, adj, weights, num_nodes):
         """Call this when the node/adj matrices are full. Deletes the zeroth element
