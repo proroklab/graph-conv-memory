@@ -133,9 +133,13 @@ class SparseGCM(torch.nn.Module):
         # Do all mutation operations on dirty_nodes, 
         # then use clean nodes in the graph state
         dirty_nodes = nodes.clone()
+        flat_edges, flat_weights, edge_B_idxs = util.flatten_edges_and_weights(
+            edges, weights, T, taus, B
+        )
+
         if self.edge_selectors:
             edges, weights = self.edge_selectors(
-                dirty_nodes, edges, weights, T, taus
+                dirty_nodes, flat_edges, flat_weights, T, taus, B, edge_B_idxs
             )
 
         # Thru network
@@ -149,21 +153,11 @@ class SparseGCM(torch.nn.Module):
             )
 
         # We need to convert to GNN input format
-        # it expects batch=[Batch], x=[Batch,feats], edge=[2, ?}
-        '''
-        datalist = []
-        for b in range(B):
-            data_x = dirty_nodes[b, :T[b] + taus[b]]
-            # Get only valid edges (-1 signifies invalid edge)
-            mask = edges[b] > -1
-            # Delete nonvalid edge pairs
-            data_edge = edges[b, :, mask[0] & mask[1]]
-            #data_edge = edges[b][edges[b] > -1].reshape(2,-1) #< T[b] + tau]
-            datalist.append(torch_geometric.data.Data(x=data_x, edge_index=data_edge))
-        batch = torch_geometric.data.Batch.from_data_list(datalist)
-        node_feats = self.gnn(batch.x, batch.edge_index)
-        '''
-        flat_nodes, flat_edges, flat_weights, output_node_idxs = util.to_batch(dirty_nodes, edges, weights, T, taus, B)
+        # it expects batch=[Batch], x=[Batch,feats], edge=[2, ?]
+        #flat_nodes, flat_edges, flat_weights, output_node_idxs = util.flatten_batch(dirty_nodes, edges, weights, T, taus, B)
+
+        # TODO: we should recoalesce edges here
+        flat_nodes, output_node_idxs = util.flatten_nodes(dirty_nodes, T, taus, B)
         node_feats = self.gnn(flat_nodes, flat_edges, flat_weights)
         # Extract the hidden repr at the new nodes
         # Each mx is variable in temporal dim, so return 2D tensor of [B*tau, feat]
