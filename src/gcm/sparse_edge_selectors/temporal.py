@@ -1,8 +1,10 @@
 import torch
+import ray
 from typing import List, Any, Tuple, Union
 
 from torchtyping import TensorType, patch_typeguard
 from typeguard import typechecked
+from gcm import util
 patch_typeguard()
 
 
@@ -16,22 +18,42 @@ class TemporalEdge(torch.nn.Module):
     @typechecked
     def forward(self, 
             nodes: TensorType["B", "N", "feat", float],
-            edges: TensorType["B", 2, "E", int],
-            weights: Union[None, TensorType["batch", 1, "E", float]],
             T: TensorType["B", int], 
             taus: TensorType["B", int],
+            B: int,
     ) -> Tuple[
-            TensorType["B", 2, "NE", int], 
-            TensorType["B", 1, "NE", float]
+            TensorType[2, "NE", int], 
+            TensorType["NE", float],
         ]:
         # Connect each [t in T to T + tau] to [t - h for h in hops]
         # shape [B, t + tau]
-        #edge_base = torch.stack([torch.arange(t, t + tau, device=nodes.device) for t in T]) 
         # shape [B, ?]
-        edge_base = torch.cat([torch.arange(T[b], T[b] + taus[b], device=x.device) for b in range(B)])
+
+        '''
+        new_edges = -1 * torch.ones((B, 2, len(self.hops)), device=edges.device, dtype=torch.long)
+        for b in range(B):
+            edge_base = torch.arange(T[b], T[b] + taus[b])
+            edge_ends = edge_base.unsqueeze(-1).repeat(1, len(self.hops))
+            edge_starts = edge_ends - self.hops
+            new_edges[b] = torch.cat((edge_starts, edge_ends))
+        edges, weights = util.add_edges(edges, new_edges, weights)
+        ray.util.pdb.set_trace()
+        return edges, weights
+        '''
+
+
+
+        edge_base = [
+            torch.arange(T[b], T[b] + taus[b], device=nodes.device) 
+            for b in range(B) if T[b] > -1 # Initial nodes dont need edges
+        ]
+        # No edges to add
+        if len(edge_base) < 1:
+            return
+        ray.util.pdb.set_trace()
+        # There are edges to add
+        edge_base = torch.cat(edge_base)
         # shape [B, t + tau, hops]
-        #edge_ends = edge_base.unsqueeze(-1).repeat(1,1, len(self.hops)) 
-        import pdb; pdb.set_trace()
         edge_ends = edge_base.unsqueeze(-1).repeat(1, len(self.hops)) 
         # shape [B, t + tau, hops]
         edge_starts = edge_ends - self.hops
@@ -43,9 +65,7 @@ class TemporalEdge(torch.nn.Module):
             dim=1
         )
         new_weights = torch.zeros_like(new_edges[:,:1,:])
-        edges = torch.cat((edges, new_edges), dim=-1)
-        weights = torch.cat((weights, new_weights), dim=-1)
-        return edges, weights
+        return new_edges, new_weights
 
 
 

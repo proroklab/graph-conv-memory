@@ -30,31 +30,18 @@ class SparseGCM(torch.nn.Module):
         aux_edge_selectors: torch.nn.Module = None,
         # Maximum number of nodes in the graph
         graph_size: int = 128,
-        # Whether to pad edges so they are always a constant size
-        pad_edges: bool = True,
-        # Max edges per batch, only used if pad_edges is set
-        max_edges: int = int(1e4),
-        # Whether the gnn outputs graph_size nodes or uses global pooling
-        pooled: bool = False,
         # Whether to add sin/cos positional encoding like in transformer
         # to the nodes
         # Creates an ordering in the graph
         positional_encoder: torch.nn.Module = None,
-        # Whether to use edge_weights
-        # only required if using learned edges
-        edge_weights: bool = False,
     ):
         super().__init__()
 
         self.preprocessor = preprocessor
         self.gnn = gnn
         self.graph_size = graph_size
-        self.max_edges = max_edges
-        self.pad_edges = pad_edges
         self.edge_selectors = edge_selectors
         self.aux_edge_selectors = aux_edge_selectors
-        self.pooled = pooled
-        self.edge_weights = edge_weights
         self.positional_encoder = positional_encoder
 
     def get_initial_hidden_state(self, x):
@@ -76,24 +63,24 @@ class SparseGCM(torch.nn.Module):
     @typechecked
     def forward(
         self, 
-        x: TensorType["B","t","feat"],
-        taus: TensorType["B"],             # sequence_lengths
+        x: TensorType["B","t","feat", float],         # input observations
+        taus: TensorType["B", int],                   # sequence_lengths
         hidden: Union[
             None, 
             Tuple[
-                TensorType["B", "N", "feats"], # Nodes
-                TensorType["B", 2, "E"],       # Edges
-                TensorType["B", 1, "E"],       # Weights
-                TensorType["B"],               # T
+                TensorType["B", "N", "feats", float], # Nodes
+                TensorType[2, "E", int],              # Edges
+                TensorType["E", float],               # Weights
+                TensorType["B", int],                 # T
             ]
         ]
     ) -> Tuple[
         torch.Tensor, 
             Tuple[
-                TensorType["B", "N", "feats"],  # Nodes
-                TensorType["B", 2, "NE"],       # Edges
-                TensorType["B", 1, "NE"],       # Weights
-                TensorType["B"]                 # T
+                TensorType["B", "N", "feats", float],  # Nodes
+                TensorType[2, "NE", int],              # Edges
+                TensorType["NE", float],               # Weights
+                TensorType["B", int]                   # T
             ]
         ]:
         """Add a memory x with temporal size tau to the graph, and query the memory for it.
@@ -121,9 +108,8 @@ class SparseGCM(torch.nn.Module):
 
         nodes = nodes.clone()
         # Add new nodes to the current graph
-        # TODO CRITICAL: Ensure edges are ALWAYS flowing past to future
-        # or this shit breaks
-        # TODO: 
+        assert torch.all(edges[0] < edges[1]), 'Edges violate causality'
+        # TODO: Wrap around instead of terminating
         if tau_idxs.max() >= N:
             raise Exception('Overflow')
 
@@ -133,13 +119,10 @@ class SparseGCM(torch.nn.Module):
         # Do all mutation operations on dirty_nodes, 
         # then use clean nodes in the graph state
         dirty_nodes = nodes.clone()
-        flat_edges, flat_weights, edge_B_idxs = util.flatten_edges_and_weights(
-            edges, weights, T, taus, B
-        )
 
         if self.edge_selectors:
             edges, weights = self.edge_selectors(
-                dirty_nodes, flat_edges, flat_weights, T, taus, B, edge_B_idxs
+                dirty_nodes, edges, weights, T, taus, B
             )
 
         # Thru network
@@ -148,17 +131,14 @@ class SparseGCM(torch.nn.Module):
         if self.positional_encoder:
             dirty_nodes = self.positional_encoder(dirty_nodes)
         if self.aux_edge_selectors:
-            edges, weights = self.edge_selectors(
+            edges, weights, edge_B_idxs = self.edge_selectors(
                 dirty_nodes, edges, weights, T, taus, B
             )
 
-        # We need to convert to GNN input format
-        # it expects batch=[Batch], x=[Batch,feats], edge=[2, ?]
-        #flat_nodes, flat_edges, flat_weights, output_node_idxs = util.flatten_batch(dirty_nodes, edges, weights, T, taus, B)
-
-        # TODO: we should recoalesce edges here
+        # Convert to GNN input format
+        # TODO coalesce before GNN
         flat_nodes, output_node_idxs = util.flatten_nodes(dirty_nodes, T, taus, B)
-        node_feats = self.gnn(flat_nodes, flat_edges, flat_weights)
+        node_feats = self.gnn(flat_nodes, edges, weights)
         # Extract the hidden repr at the new nodes
         # Each mx is variable in temporal dim, so return 2D tensor of [B*tau, feat]
         mx = node_feats[output_node_idxs]
@@ -167,16 +147,24 @@ class SparseGCM(torch.nn.Module):
             torch.isfinite(mx)
         ), "Got NaN in returned memory, try using tanh activation"
 
+        # Input obs were dense and padded, so output should be dense and padded
+        dense_B_idxs, dense_tau_idxs = util.get_nonpadded_idxs(T, taus, B)
+        mx_dense = torch.zeros_like(x)
+        mx_dense[dense_B_idxs, dense_tau_idxs] = mx
+
+        '''
         # Fix for ray, edges must be constant size
         if self.pad_edges:
             self.edge_cleanup(edges)
             unpadded_edges = edges
             # Pad edges with -1 (-1 is treated as invalid in GCM)
-            edges = torch.ones(edges.shape[0], edges.shape[1], self.max_edges) * -1
-            edges[:,:, :edges.shape[-1]] = edges
+            edge_padding = torch.ones(edges.shape[0], edges.shape[1], self.max_edges) * -1
 
+
+            edges[:,:, :edges.shape[-1]] = edges
+        '''
         T = T + taus
-        return mx, (nodes, edges, weights, T)
+        return mx_dense, (nodes, edges, weights, T)
 
     # TODO: implement
     def node_cleanup(self, nodes):

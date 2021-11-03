@@ -25,8 +25,8 @@ class RaySparseGCM(TorchModelV2, nn.Module):
     DEFAULT_CONFIG = {
         # Maximum number of nodes in a graph
         "graph_size": 32,
-        # Maximum number of edges per graph per batch
-        "max_edges": 5,
+        # Maximum number of edges in each batch
+        "max_edges": 256,
         # Input size to the GNN. Make sure your first gnn layer
         # has this many input channels
         "gnn_input_size": 64,
@@ -53,9 +53,6 @@ class RaySparseGCM(TorchModelV2, nn.Module):
         # and positional encoding. Only use non-human (learned) edges here
         # as they are no longer in a human readable form
         "aux_edge_selectors": None,
-        # Whether edge weights are used. This should be false unless using
-        # bernoulli edges
-        "edge_weights": False,
         # Optional network that processes observations before
         # the GNN. May allow for learning representations that
         # aggregate better. Note the input to the preprocessor will
@@ -133,7 +130,7 @@ class RaySparseGCM(TorchModelV2, nn.Module):
 
         self.gcm = SparseGCM(
             gnn=cfg["gnn"],
-            max_edges=cfg["max_edges"],
+            graph_size=cfg["graph_size"],
             preprocessor=pp,
             edge_selectors=self.cfg["edge_selectors"],
             aux_edge_selectors=self.cfg["aux_edge_selectors"],
@@ -158,7 +155,7 @@ class RaySparseGCM(TorchModelV2, nn.Module):
         nodes = torch.zeros((self.cfg["graph_size"], self.input_dim))
         # If these are type==long, they become np arrays instead of torch...
         edges = torch.zeros((2, self.cfg["max_edges"]))
-        weights = torch.zeros((1, self.cfg["max_edges"]))
+        weights = torch.ones((1, self.cfg["max_edges"]))
 
         T = torch.tensor(0, dtype=torch.long)
         state = [nodes, edges, weights, T]
@@ -188,9 +185,8 @@ class RaySparseGCM(TorchModelV2, nn.Module):
             max_seq_len=seq_lens.max(), 
             framework="torch"
         )
-        # Batch and Time
-        # Forward expects outputs as [B, t, logits]
         # TODO: ppo sequencing is broken (rllib bug not ours)
+        # Batch and Time
         B = dense.shape[0]
         t = dense.shape[1]
         # Sometimes numpy sometimes tensor...
@@ -199,30 +195,15 @@ class RaySparseGCM(TorchModelV2, nn.Module):
         else:
             taus = seq_lens
 
-        nodes, edges, weights, T = state
+        nodes, edges, weights, T = util.unpack_hidden(state, B)
         edges, T = edges.long(), T.long()
+        hidden = (nodes, edges, weights, T)
 
         # Push thru pre-gcm layers
-        hidden = (nodes, edges, weights, T)
-        # We have a zero-padded dense input
-        # Thru GCM, output is flattened and ordered shape [B*tau, feat]
         out, hidden = self.gcm(dense, taus, hidden)
-        logits = self.logit_branch(out)
-        values = self.value_branch(out)
 
-        # GCM output is [B*tau, feat], but ray wants it packed to max(seq_len)
-        # should zero-padded to size [B * max(taus), feat]
-        dense_B_idxs, dense_tau_idxs = util.get_nonpadded_idxs(T, taus, B)
+        logits = self.logit_branch(out).reshape(B * t, -1)
+        self.cur_val = self.value_branch(out).reshape(B * t)
 
-        padded_logits = torch.zeros((B, taus.max(), logits.shape[-1]), device=logits.device)
-        padded_logits[dense_B_idxs, dense_tau_idxs] = logits
-        padded_logits = padded_logits.reshape(B * t, -1)
-
-        padded_values = torch.zeros((B, taus.max(), values.shape[-1]), device=values.device)
-        padded_values[dense_B_idxs, dense_tau_idxs] = values
-        padded_values = padded_values.reshape(B * t)
-
-        self.cur_val = padded_values
-
-        state = list(hidden)
-        return padded_logits, state
+        packed_state = util.pack_hidden(hidden, B, self.cfg["max_edges"])
+        return logits, list(packed_state)
