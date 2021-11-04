@@ -100,8 +100,6 @@ class SparseGCM(torch.nn.Module):
         N = nodes.shape[1]
         B = x.shape[0]
 
-        self.node_cleanup(nodes)
-
         # Batch and time idxs for nodes we intend to add
         B_idxs, tau_idxs = util.get_new_node_idxs(T, taus, B)
         dense_B_idxs, dense_tau_idxs = util.get_nonpadded_idxs(T, taus, B)
@@ -140,8 +138,9 @@ class SparseGCM(torch.nn.Module):
             )
 
         # Convert to GNN input format
-        # TODO coalesce before GNN
         flat_nodes, output_node_idxs = util.flatten_nodes(dirty_nodes, T, taus, B)
+        if edges.numel() > 0:
+            edges, weights = torch_geometric.utils.coalesce(edges, weights)
         node_feats = self.gnn(flat_nodes, edges, weights)
         # Extract the hidden repr at the new nodes
         # Each mx is variable in temporal dim, so return 2D tensor of [B*tau, feat]
@@ -158,58 +157,3 @@ class SparseGCM(torch.nn.Module):
 
         T = T + taus
         return mx_dense, (nodes, edges, weights, T)
-
-    # TODO: implement
-    def node_cleanup(self, nodes):
-        """Call this when the node matrix if full, so we can erase old
-        nodes to add new nodes"""
-        return
-        overflow_mask = T + taus > graph_size
-        overflowing_batches = overflow_mask.nonzero().squeeze()
-        nodes[overflowing_batches, 0] = 0
-
-    # TODO: implement
-    def edge_cleanup(self, edges):
-        """Call this when the edge matrix is full, so we can erase old
-        edges to add new edges"""
-        # Remove edges over the limit
-        return
-        overflow_mask = edges.shape[-1]
-        if torch.any(unpadded_edges.shape[-1] > self.max_edges):
-            overflow = unpadded_edges.shape[-1] - self.max_edges
-            print('Warning: edge overflow, truncating {overflow} edge pairs from front')
-            unpadded_edges = unpadded_edges[:,:,overflow:]
-        
-
-    def wrap_overflow(self, nodes, adj, weights, num_nodes):
-        """Call this when the node/adj matrices are full. Deletes the zeroth element
-        of the matrices and shifts all the elements up by one, producing a free row
-        at the end. You will likely want to call .clone() on the arguments that require
-        gradient computation.
-
-        Returns new nodes, adj, weights, and num_nodes matrices"""
-        N = nodes.shape[1]
-        overflow_mask = num_nodes + 1 > N
-        # Shift node matrix into the past
-        # by one and forget the zeroth node
-        overflowing_batches = overflow_mask.nonzero().squeeze()
-        #nodes = nodes.clone()
-        #adj = adj.clone()
-        # Zero entries before shifting
-        nodes[overflowing_batches, 0] = 0
-        adj[overflowing_batches, 0, :] = 0
-        adj[overflowing_batches, :, 0] = 0
-        # Roll newly zeroed zeroth entry to final entry
-        nodes[overflowing_batches] = torch.roll(nodes[overflowing_batches], -1, -2)
-        adj[overflowing_batches] = torch.roll(
-            adj[overflowing_batches], (-1, -1), (-1, -2)
-        )
-        if weights.numel() != 0:
-            #weights = weights.clone()
-            weights[overflowing_batches, 0, :] = 0
-            weights[overflowing_batches, :, 0] = 0
-            weights[overflowing_batches] = torch.roll(
-                weights[overflowing_batches], (-1, -1), (-1, -2)
-            )
-        num_nodes[overflow_mask] = num_nodes[overflow_mask] - 1
-        return nodes, adj, weights, num_nodes
