@@ -43,28 +43,65 @@ class TemporalEdge(torch.nn.Module):
 
 
 
+        # TODO: offset edges by batch here
+        # TODO: also get rid of invalid (-1) edges
         edge_base = [
             torch.arange(T[b], T[b] + taus[b], device=nodes.device) 
             for b in range(B) if T[b] > -1 # Initial nodes dont need edges
         ]
+
+
         # No edges to add
         if len(edge_base) < 1:
-            return
-        ray.util.pdb.set_trace()
-        # There are edges to add
+            empty_edges = torch.empty((2,0), device=nodes.device, dtype=torch.long)
+            empty_weights = torch.empty((0.0), device=nodes.device, dtype=torch.float)
+            return empty_edges, empty_weights
+
         edge_base = torch.cat(edge_base)
+        # TODO: remove
+        tmp_edges = edge_base.repeat(2,1)
+        tmp_weights = edge_base.float()
+        
+        return tmp_edges, tmp_weights
+
+        """
         # shape [B, t + tau, hops]
         edge_ends = edge_base.unsqueeze(-1).repeat(1, len(self.hops)) 
         # shape [B, t + tau, hops]
         edge_starts = edge_ends - self.hops
-        # flatten
 
+        new_edges = torch.cat((edge_starts, edge_ends), dim=-1).permute(1,0)
+        new_weights = torch.ones_like(new_edges[0], dtype=torch.float)
+
+        batch_offsets = T.cumsum(dim=0).roll(1)
+        batch_offsets[0] = 0
+
+        edge_offsets = batch_offsets.unsqueeze(-1).unsqueeze(-1).expand(-1,2,edges.shape[-1])
+        offset_edges = edges + edge_offsets
+        offset_edges_B_idx = torch.cat(
+            [
+                b * torch.ones(
+                    edges.shape[-1], device=edges.device, dtype=torch.long
+                ) for b in range(B)
+            ]
+        )
+    # Filter invalid edges (those that were < 0 originally)
+    # Swap dims (B,2,NE) => (2,B,NE)
+    mask = (offset_edges >= edge_offsets).permute(1,0,2)
+        mask = new_edges >= 0
+        new_edges = new_edges.masked_select(mask).reshape(2,-1)
+        new_weights = new_weights.masked_select(mask[0])
+        """
+
+        '''
+        # flatten
         # Shape [B, 2, t + tau * hops]
         new_edges = torch.stack(
             (edge_ends.flatten(1,-1), edge_starts.flatten(1,-1)),
             dim=1
         )
         new_weights = torch.zeros_like(new_edges[:,:1,:])
+        '''
         return new_edges, new_weights
 
 

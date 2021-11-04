@@ -155,7 +155,8 @@ class RaySparseGCM(TorchModelV2, nn.Module):
         nodes = torch.zeros((self.cfg["graph_size"], self.input_dim))
         # If these are type==long, they become np arrays instead of torch...
         edges = torch.zeros((2, self.cfg["max_edges"]))
-        weights = torch.ones((1, self.cfg["max_edges"]))
+        # If we set weights to one ray makes it into np array of objs...
+        weights = torch.zeros((1, self.cfg["max_edges"]))
 
         T = torch.tensor(0, dtype=torch.long)
         state = [nodes, edges, weights, T]
@@ -191,15 +192,20 @@ class RaySparseGCM(TorchModelV2, nn.Module):
         t = dense.shape[1]
         # Sometimes numpy sometimes tensor...
         if type(seq_lens) == np.ndarray:
-            taus = torch.from_numpy(seq_lens).to(dense.device)
+            taus = torch.from_numpy(seq_lens).to(dense.device).long()
         else:
-            taus = seq_lens
+            taus = seq_lens.long()
+
 
         nodes, edges, weights, T = util.unpack_hidden(state, B)
+        # Initial state
+        if torch.all(weights == 0):
+            weights[:] = 1
         edges, T = edges.long(), T.long()
         hidden = (nodes, edges, weights, T)
 
         # Push thru pre-gcm layers
+        #ray.util.pdb.set_trace()
         out, hidden = self.gcm(dense, taus, hidden)
 
         logits = self.logit_branch(out).reshape(B * t, -1)

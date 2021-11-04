@@ -108,7 +108,8 @@ class SparseGCM(torch.nn.Module):
 
         nodes = nodes.clone()
         # Add new nodes to the current graph
-        assert torch.all(edges[0] < edges[1]), 'Edges violate causality'
+        # TODO: ensure > rather than geq
+        assert torch.all(edges[0] <= edges[1]), 'Edges violate causality'
         # TODO: Wrap around instead of terminating
         if tau_idxs.max() >= N:
             raise Exception('Overflow')
@@ -121,9 +122,12 @@ class SparseGCM(torch.nn.Module):
         dirty_nodes = nodes.clone()
 
         if self.edge_selectors:
-            edges, weights = self.edge_selectors(
-                dirty_nodes, edges, weights, T, taus, B
+            new_edges, new_weights = self.edge_selectors(
+                dirty_nodes, T, taus, B
             )
+            edges = torch.cat((edges, new_edges), dim=-1)
+            weights = torch.cat((weights, new_weights), dim=-1)
+
 
         # Thru network
         if self.preprocessor:
@@ -149,7 +153,7 @@ class SparseGCM(torch.nn.Module):
 
         # Input obs were dense and padded, so output should be dense and padded
         dense_B_idxs, dense_tau_idxs = util.get_nonpadded_idxs(T, taus, B)
-        mx_dense = torch.zeros_like(x)
+        mx_dense = torch.zeros((*x.shape[:-1], node_feats.shape[-1]), device=x.device)
         mx_dense[dense_B_idxs, dense_tau_idxs] = mx
 
         '''
@@ -218,6 +222,5 @@ class SparseGCM(torch.nn.Module):
             weights[overflowing_batches] = torch.roll(
                 weights[overflowing_batches], (-1, -1), (-1, -2)
             )
-
         num_nodes[overflow_mask] = num_nodes[overflow_mask] - 1
         return nodes, adj, weights, num_nodes

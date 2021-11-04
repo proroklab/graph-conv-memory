@@ -1,4 +1,6 @@
 import torch
+import numpy as np
+import ray
 import torch_geometric
 import sparsemax
 from typing import Tuple, List
@@ -152,7 +154,248 @@ def to_dense(mx, T, taus, B):
 
     return dense_mx
 
-def to_batch(nodes, edges, weights, T, taus, B):
+
+def get_batch_offsets(T, taus):
+    """Get node offsets into flattened tensor"""
+    # Initial offset is zero, not T + tau, roll into place
+    batch_offsets = (T + taus).cumsum(dim=0).roll(1,0)
+    batch_offsets[0] = 0
+    return batch_offsets
+
+    
+'''
+def unique(x, dim=None):
+    """Unique elements of x and indices of those unique elements
+    https://github.com/pytorch/pytorch/issues/36748#issuecomment-619514810
+
+    e.g.
+
+    unique(tensor([
+        [1, 2, 3],
+        [1, 2, 4],
+        [1, 2, 3],
+        [1, 2, 5]
+    ]), dim=0)
+    => (tensor([[1, 2, 3],
+                [1, 2, 4],
+                [1, 2, 5]]),
+        tensor([0, 1, 3]))
+    """
+    unique, inverse = torch.unique(
+        x, sorted=True, return_inverse=True, dim=dim)
+    perm = torch.arange(inverse.size(0), dtype=inverse.dtype,
+                        device=inverse.device)
+    inverse, perm = inverse.flip([0]), perm.flip([0])
+    return unique, inverse.new_empty(unique.size(dim)).scatter_(0, inverse, perm)
+
+def first_available_edge_idx(edges):
+    """Given edges with shape [B,2,E], return
+    the first unused edge index for each batch"""
+    padded_edges = (edges == -1).all(dim=1)
+    batch_idx, edge_idx = torch.unbind(padded_edges.nonzero().T)
+    # Expand each batch into an edge
+    # and let torch coalesce handle the rest
+    batch_idx = batch_idx.expand(2, -1)#.repeat(2,1)
+    batch_idx_rp, edge_boundary_idx = torch_geometric.utils.coalesce(batch_idx, edge_idx, reduce='min')
+    return batch_idx_rp[0], edge_boundary_idx
+'''
+
+def add_edges(edges, new_edges, weights, new_weights=None):
+    """Add new edges of [B,2,NE] to edges [B,2,E] (and same with weights)"""
+    for b in range(edges.shape[0]):
+        ray.util.pdb.set_trace()
+        free_start_idx = (edges[b][0] == -1).nonzero()[0]
+        end_idx = free_start_idx + new_edges[b].shape[-1]
+        edges[b, : , free_start_idx:end_idx] = new_edges[b]
+        if new_weights is None:
+            weights[b, free_start_idx:end_idx] = 1.0
+        else:
+            weights[b, free_start_idx:end_idx] = new_weights
+
+    '''
+    free_idx = (edges == -1).all(dim=1)
+    num_edges = 
+    edges[free_batch_idx
+
+    #free_batch_idx, free_edge_idx = first_available_edge_idx(edges)
+    '''
+
+
+def pack_hidden(hidden, B, max_edges, edge_fill=-1, weight_fill=1.0):
+    """Converts the hidden states to a dense representation
+
+    Unflatten edges from [2, k* NE] to [B, 2, max_edges].  In other words, prep
+    edges and weights for dense transport (ray).
+
+    Returns an updated hidden representation"""
+
+    nodes, edges, weights, T = hidden
+    batch_ends = T.cumsum(dim=0)
+    batch_starts = batch_ends.roll(1)
+    batch_starts[0] = 0
+    dense_edges = torch.zeros((B, 2, max_edges), dtype=torch.long).fill_(edge_fill)
+    dense_weights = torch.zeros((B, 1, max_edges), dtype=torch.float).fill_(weight_fill)
+
+    for b in range(B):
+        #mask = ((batch_starts[b] < edges) & (edges < batch_ends[b]))
+        source_mask = (batch_starts[b] <= edges[0]) * (edges[0] < batch_ends[b])
+        sink_mask = (batch_starts[b] <= edges[1]) * (edges[1] < batch_ends[b])
+        mask = source_mask * sink_mask
+
+        # Only if we have edges
+        if edges[:,mask].numel() > 0:
+            num_edges = mask.shape[0]
+            # More than max edges
+            if num_edges > max_edges:
+                truncate = num_edges - max_edges
+                print(
+                    f'Warning {num_edges} edges greater than max edges {max_edges} '
+                    f'dropping the first {truncate} edges'
+                )
+            batch_edges = edges[:,mask] - batch_starts[b]
+            batch_weights = weights[mask]
+            max_indices = min(batch_edges.shape[-1], max_edges)
+            dense_edges[b,:, :max_indices] = batch_edges[:,:max_indices]
+            dense_weights[b, 0, :max_indices] = batch_weights[:max_indices]
+
+    return nodes, dense_edges, dense_weights, T
+
+
+def unpack_hidden(hidden, B):
+    """Converts dense hidden states to a sparse representation
+    
+    Unflatten edges from [2, k* NE] to [B, 2, max_edges].  In other words, prep
+    edges and weights for dense transport (ray).
+
+    Returns edges [B,2,NE] and weights [B,1,NE]"""
+    nodes, edges, weights, T = hidden
+
+    batch_offsets = T.cumsum(dim=0).roll(1)
+    batch_offsets[0] = 0
+
+    edge_offsets = batch_offsets.unsqueeze(-1).unsqueeze(-1).expand(-1,2,edges.shape[-1])
+    offset_edges = edges + edge_offsets
+    offset_edges_B_idx = torch.cat(
+        [
+            b * torch.ones(
+                edges.shape[-1], device=edges.device, dtype=torch.long
+            ) for b in range(B)
+        ]
+    )
+    # Filter invalid edges (those that were < 0 originally)
+    # Swap dims (B,2,NE) => (2,B,NE)
+    mask = (offset_edges >= edge_offsets).permute(1,0,2)
+    stacked_mask = (mask[0] & mask[1]).unsqueeze(0).expand(2,-1,-1)
+    # Now filter edges, weights, and indices using masks
+    # Careful, mask select will automatically flatten
+    # so do it last, this squeezes from from (2,B,NE) => (2,B*NE)
+    flat_edges = edges.permute(1,0,2).masked_select(stacked_mask).reshape(2,-1)
+    flat_weights = weights.masked_select(stacked_mask[0]).flatten()
+    flat_B_idx = offset_edges_B_idx.masked_select(stacked_mask[0].flatten())
+        
+
+    # Finally, remove duplicate edges and weights
+    # but only if we have edges
+    if flat_edges.numel() > 0:
+        # Make sure idxs are removed alongside edges and weights
+        flat_edges, [flat_weights, flat_B_idx] = torch_geometric.utils.coalesce(
+            flat_edges, [flat_weights, flat_B_idx], reduce='min'
+        )
+    return nodes, flat_edges, flat_weights, T
+
+
+def unflatten_edges_and_weights(edges, weights, max_edges, B, edge_fill=-1, weight_fill=1.0):
+    """Unflatten edges from [2, k* NE] to [B, 2, max_edges].  In other words, prep
+    edges and weights for dense transport (ray).
+
+    Returns edges [B,2,NE] and weights [B,1,NE]"""
+    batch_starts = get_batch_offsets(T, taus)
+    batch_ends = (T + taus).cumsum(dim=0).roll(1,0)
+    dense_edges = torch.zeros((B, 2, max_edges))._fill(edge_fill)
+    dense_weights = torch.zeros((B, 1, max_edges))._fill(weight_fill)
+
+    for b in range(B):
+        mask = (batch_starts[b] < edges < batch_ends[b])
+        source_mask = (batch_starts[b][0] < edges) * (edges < batch_ends[b][0])
+        sink_mask = (batch_starts[b][1] < edges) * (edges < batch_ends[b][1])
+        mask = source_mask * sink_mask
+
+        dense_edges[b,:] = edges[:,mask]
+        dense_weights[b] = weights[mask]
+    """
+    dense_edges = -1 * torch.ones(B, 2, max_edges)
+    dense_edges.scatter_(0, edge_b_idx, edges)
+    dense_weights = -1 * torch.ones(B, 1, max_edges)
+    dense_weights = torch.scatter(0, edge_b_idx, weights, dense_weights)
+    """
+    return dense_edges, dense_weights
+
+
+def flatten_edges_and_weights(edges, weights, T, taus, B):
+    """Flatten edges from [B, 2, NE] to [2, k * NE], coalescing
+    and removing invalid edges (-1). In other words, prep
+    edges and weights for GNN ingestion.
+
+    Returns flattened edges, weights, and corresponding
+    batch indices"""
+    batch_offsets = get_batch_offsets(T, taus)
+    edge_offsets = batch_offsets.unsqueeze(-1).unsqueeze(-1).expand(-1,2,edges.shape[-1])
+    offset_edges = edges + edge_offsets
+    offset_edges_B_idx = torch.cat(
+        [
+            b * torch.ones(
+                edges.shape[-1], device=edges.device, dtype=torch.long
+            ) for b in range(B)
+        ]
+    )
+    # Filter invalid edges (those that were < 0 originally)
+    # Swap dims (B,2,NE) => (2,B,NE)
+    mask = (offset_edges >= edge_offsets).permute(1,0,2)
+    stacked_mask = (mask[0] & mask[1]).unsqueeze(0).expand(2,-1,-1)
+    # Now filter edges, weights, and indices using masks
+    # Careful, mask select will automatically flatten
+    # so do it last, this squeezes from from (2,B,NE) => (2,B*NE)
+    flat_edges = edges.permute(1,0,2).masked_select(stacked_mask).reshape(2,-1)
+    flat_weights = weights.permute(1,0,2).masked_select(stacked_mask[0]).flatten()
+    flat_B_idx = offset_edges_B_idx.masked_select(stacked_mask[0].flatten())
+        
+
+    # Finally, remove duplicate edges and weights
+    # but only if we have edges
+    if flat_edges.numel() > 0:
+        # Make sure idxs are removed alongside edges and weights
+        flat_edges, [flat_weights, flat_B_idx] = torch_geometric.utils.coalesce(
+            flat_edges, [flat_weights, flat_B_idx], reduce='min'
+        )
+
+    return flat_edges, flat_weights, flat_B_idx
+
+
+def flatten_nodes(nodes, T, taus, B):
+    """Flatten nodes from [B, N, feat] to [B * N, feat] for ingestion
+    by the GNN.
+
+    Returns flattened nodes and corresponding batch indices"""
+    batch_offsets = get_batch_offsets(T, taus)
+    B_idxs, tau_idxs = get_valid_node_idxs(T, taus, B)
+    flat_nodes = nodes[B_idxs, tau_idxs]
+    # Extracting belief requires batch-tau indices (newly inserted nodes)
+    # return these too
+    # Flat nodes are ordered B,:T+tau (all valid nodes)
+    # We want B,T:T+tau (new nodes), which is batch_offsets:batch_offsets + tau
+    output_node_idxs = torch.cat(
+        [
+            torch.arange(
+                batch_offsets[b], batch_offsets[b] + taus[b], device=nodes.device
+            ) for b in range(B)
+        ]
+    )
+    return flat_nodes, output_node_idxs
+
+
+
+
+def flatten_batch(nodes, edges, weights, T, taus, B):
     """Squeeze node, edge, and weight batch dimensions into a single
     huge graph. Also deletes non-valid edge pairs"""
     b_idx = torch.arange(B, device=nodes.device)
@@ -170,8 +413,6 @@ def to_batch(nodes, edges, weights, T, taus, B):
     stacked_mask = (mask[0] & mask[1]).unsqueeze(0).expand(2,-1,-1)
     # Careful, mask select will automatically flatten
     # so do it last, this squeezes from from (2,B,NE) => (2,B*NE)
-    if edges.numel() != stacked_mask.numel():
-        import pdb; pdb.set_trace()
     flat_edges = edges.permute(1,0,2).masked_select(stacked_mask).reshape(2,-1)
     # Do the same with weights, which will be of size E
     flat_weights = weights.permute(1,0,2).masked_select(stacked_mask[0]).flatten()
