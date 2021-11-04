@@ -113,7 +113,8 @@ def get_nonpadded_idxs(T, taus, B):
     return dense_B_idxs, dense_tau_idxs
     
 
-def get_new_node_idxs(T, taus, B):
+@torch.jit.script
+def get_new_node_idxs(T: torch.Tensor, taus: torch.Tensor, B: int):
     """Given T and tau tensors, return indices matching batches to taus.
     These tell us which elements in the node matrix we have just added
     during this iteration, and organize them by batch. 
@@ -127,7 +128,8 @@ def get_new_node_idxs(T, taus, B):
     tau_idxs = torch.cat([torch.arange(T[b], T[b] + taus[b], device=T.device) for b in range(B)])
     return B_idxs, tau_idxs
 
-def get_valid_node_idxs(T, taus, B):
+@torch.jit.script
+def get_valid_node_idxs(T: torch.Tensor, taus: torch.Tensor, B: int):
     """Given T and tau tensors, return indices matching batches to taus.
     These tell us which elements in the node matrix are valid for convolution,
     and organize them by batch. 
@@ -155,7 +157,8 @@ def to_dense(mx, T, taus, B):
     return dense_mx
 
 
-def get_batch_offsets(T, taus):
+@torch.jit.script
+def get_batch_offsets(T: torch.Tensor, taus: torch.Tensor):
     """Get node offsets into flattened tensor"""
     # Initial offset is zero, not T + tau, roll into place
     batch_offsets = (T + taus).cumsum(dim=0).roll(1,0)
@@ -222,6 +225,33 @@ def add_edges(edges, new_edges, weights, new_weights=None):
 
 
 def pack_hidden(hidden, B, max_edges, edge_fill=-1, weight_fill=1.0):
+    return _pack_hidden(*hidden, B, max_edges, edge_fill=-1, weight_fill=1.0)
+
+def unpack_hidden(hidden, B):
+    nodes, flat_edges, flat_weights, T, flat_B_idx = _unpack_hidden(*hidden, B)
+    
+    # The following can't be jitted, so it sits in this fn
+
+    # Finally, remove duplicate edges and weights
+    # but only if we have edges
+    if flat_edges.numel() > 0:
+        # Make sure idxs are removed alongside edges and weights
+        flat_edges, [flat_weights, flat_B_idx] = torch_geometric.utils.coalesce(
+            flat_edges, [flat_weights, flat_B_idx], reduce='min'
+        )
+    return nodes, flat_edges, flat_weights, T
+
+
+@torch.jit.script
+def _pack_hidden(
+    nodes: torch.Tensor, 
+    edges: torch.Tensor, 
+    weights: torch.Tensor,
+    T: torch.Tensor, 
+    B: int, 
+    max_edges: int, 
+    edge_fill: int=-1, 
+    weight_fill: float=1.0):
     """Converts the hidden states to a dense representation
 
     Unflatten edges from [2, k* NE] to [B, 2, max_edges].  In other words, prep
@@ -229,7 +259,7 @@ def pack_hidden(hidden, B, max_edges, edge_fill=-1, weight_fill=1.0):
 
     Returns an updated hidden representation"""
 
-    nodes, edges, weights, T = hidden
+    #nodes, edges, weights, T = hidden
     batch_ends = T.cumsum(dim=0)
     batch_starts = batch_ends.roll(1)
     batch_starts[0] = 0
@@ -237,7 +267,6 @@ def pack_hidden(hidden, B, max_edges, edge_fill=-1, weight_fill=1.0):
     dense_weights = torch.zeros((B, 1, max_edges), dtype=torch.float).fill_(weight_fill)
 
     for b in range(B):
-        #mask = ((batch_starts[b] < edges) & (edges < batch_ends[b]))
         source_mask = (batch_starts[b] <= edges[0]) * (edges[0] < batch_ends[b])
         sink_mask = (batch_starts[b] <= edges[1]) * (edges[1] < batch_ends[b])
         mask = source_mask * sink_mask
@@ -249,7 +278,7 @@ def pack_hidden(hidden, B, max_edges, edge_fill=-1, weight_fill=1.0):
             if num_edges > max_edges:
                 truncate = num_edges - max_edges
                 print(
-                    f'Warning {num_edges} edges greater than max edges {max_edges} '
+                    f'Warning: {num_edges} edges greater than max edges {max_edges} '
                     f'dropping the first {truncate} edges'
                 )
             batch_edges = edges[:,mask] - batch_starts[b]
@@ -261,15 +290,19 @@ def pack_hidden(hidden, B, max_edges, edge_fill=-1, weight_fill=1.0):
     return nodes, dense_edges, dense_weights, T
 
 
-def unpack_hidden(hidden, B):
+@torch.jit.script
+def _unpack_hidden(
+    nodes: torch.Tensor, 
+    edges: torch.Tensor, 
+    weights: torch.Tensor,
+    T: torch.Tensor, 
+    B: int):
     """Converts dense hidden states to a sparse representation
     
     Unflatten edges from [2, k* NE] to [B, 2, max_edges].  In other words, prep
     edges and weights for dense transport (ray).
 
     Returns edges [B,2,NE] and weights [B,1,NE]"""
-    nodes, edges, weights, T = hidden
-
     batch_offsets = T.cumsum(dim=0).roll(1)
     batch_offsets[0] = 0
 
@@ -294,14 +327,7 @@ def unpack_hidden(hidden, B):
     flat_B_idx = offset_edges_B_idx.masked_select(stacked_mask[0].flatten())
         
 
-    # Finally, remove duplicate edges and weights
-    # but only if we have edges
-    if flat_edges.numel() > 0:
-        # Make sure idxs are removed alongside edges and weights
-        flat_edges, [flat_weights, flat_B_idx] = torch_geometric.utils.coalesce(
-            flat_edges, [flat_weights, flat_B_idx], reduce='min'
-        )
-    return nodes, flat_edges, flat_weights, T
+    return nodes, flat_edges, flat_weights, T, flat_B_idx
 
 
 def unflatten_edges_and_weights(edges, weights, max_edges, B, edge_fill=-1, weight_fill=1.0):
