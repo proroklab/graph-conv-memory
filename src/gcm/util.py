@@ -103,7 +103,8 @@ class Spardgen(torch.nn.Module):
         y_hard = (y_soft != 0).float()
         return y_hard - y_soft.detach() + y_soft
 
-def get_nonpadded_idxs(T, taus, B):
+@torch.jit.script
+def get_nonpadded_idxs(T: torch.Tensor, taus: torch.Tensor, B: int):
     """Get the non-padded indices of a zero-padded
     batch of observations. In other words, get only valid elements and discard
     the meaningless zeros."""
@@ -397,7 +398,7 @@ def flatten_edges_and_weights(edges, weights, T, taus, B):
     return flat_edges, flat_weights, flat_B_idx
 
 
-def flatten_nodes(nodes, T, taus, B):
+def flatten_nodes(nodes: torch.Tensor, T: torch.Tensor, taus: torch.Tensor, B: int):
     """Flatten nodes from [B, N, feat] to [B * N, feat] for ingestion
     by the GNN.
 

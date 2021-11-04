@@ -156,17 +156,6 @@ class SparseGCM(torch.nn.Module):
         mx_dense = torch.zeros((*x.shape[:-1], node_feats.shape[-1]), device=x.device)
         mx_dense[dense_B_idxs, dense_tau_idxs] = mx
 
-        '''
-        # Fix for ray, edges must be constant size
-        if self.pad_edges:
-            self.edge_cleanup(edges)
-            unpadded_edges = edges
-            # Pad edges with -1 (-1 is treated as invalid in GCM)
-            edge_padding = torch.ones(edges.shape[0], edges.shape[1], self.max_edges) * -1
-
-
-            edges[:,:, :edges.shape[-1]] = edges
-        '''
         T = T + taus
         return mx_dense, (nodes, edges, weights, T)
 
