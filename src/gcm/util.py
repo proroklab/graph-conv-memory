@@ -275,16 +275,15 @@ def _pack_hidden(
         # Only if we have edges
         if edges[:,mask].numel() > 0:
             num_edges = mask.shape[0]
-            # More than max edges
-            if num_edges > max_edges:
-                truncate = num_edges - max_edges
-                print(
-                    f'Warning: {num_edges} edges greater than max edges {max_edges} '
-                    f'dropping the first {truncate} edges'
-                )
             batch_edges = edges[:,mask] - batch_starts[b]
             batch_weights = weights[mask]
             max_indices = min(batch_edges.shape[-1], max_edges)
+            # More than max edges
+            if max_indices != batch_edges.shape[-1]:
+                print(
+                    f'Warning: {max_indices} edges greater than max edges {max_edges} '
+                    f'dropping the first {max_indices - max_edges} edges'
+                )
             dense_edges[b,:, :max_indices] = batch_edges[:,:max_indices]
             dense_weights[b, 0, :max_indices] = batch_weights[:max_indices]
 

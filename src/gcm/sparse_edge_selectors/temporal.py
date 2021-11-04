@@ -43,13 +43,12 @@ class TemporalEdge(torch.nn.Module):
 
 
 
-        # TODO: offset edges by batch here
         # TODO: also get rid of invalid (-1) edges
+        batch_offsets = util.get_batch_offsets(T, taus)
         edge_base = [
-            torch.arange(T[b], T[b] + taus[b], device=nodes.device) 
+            torch.arange(batch_offsets[b] + T[b], batch_offsets[b] + T[b] + taus[b], device=nodes.device) 
             for b in range(B) if T[b] > -1 # Initial nodes dont need edges
         ]
-
 
         # No edges to add
         if len(edge_base) < 1:
