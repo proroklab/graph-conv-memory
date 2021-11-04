@@ -279,7 +279,7 @@ def _pack_hidden(
             batch_weights = weights[mask]
             max_indices = min(batch_edges.shape[-1], max_edges)
             # More than max edges
-            if max_indices != batch_edges.shape[-1]:
+            if max_indices < batch_edges.shape[-1]:
                 print(
                     f'Warning: {max_indices} edges greater than max edges {max_edges} '
                     f'dropping the first {max_indices - max_edges} edges'
