@@ -191,38 +191,7 @@ def unique(x, dim=None):
                         device=inverse.device)
     inverse, perm = inverse.flip([0]), perm.flip([0])
     return unique, inverse.new_empty(unique.size(dim)).scatter_(0, inverse, perm)
-
-def first_available_edge_idx(edges):
-    """Given edges with shape [B,2,E], return
-    the first unused edge index for each batch"""
-    padded_edges = (edges == -1).all(dim=1)
-    batch_idx, edge_idx = torch.unbind(padded_edges.nonzero().T)
-    # Expand each batch into an edge
-    # and let torch coalesce handle the rest
-    batch_idx = batch_idx.expand(2, -1)#.repeat(2,1)
-    batch_idx_rp, edge_boundary_idx = torch_geometric.utils.coalesce(batch_idx, edge_idx, reduce='min')
-    return batch_idx_rp[0], edge_boundary_idx
 '''
-
-def add_edges(edges, new_edges, weights, new_weights=None):
-    """Add new edges of [B,2,NE] to edges [B,2,E] (and same with weights)"""
-    for b in range(edges.shape[0]):
-        ray.util.pdb.set_trace()
-        free_start_idx = (edges[b][0] == -1).nonzero()[0]
-        end_idx = free_start_idx + new_edges[b].shape[-1]
-        edges[b, : , free_start_idx:end_idx] = new_edges[b]
-        if new_weights is None:
-            weights[b, free_start_idx:end_idx] = 1.0
-        else:
-            weights[b, free_start_idx:end_idx] = new_weights
-
-    '''
-    free_idx = (edges == -1).all(dim=1)
-    num_edges = 
-    edges[free_batch_idx
-
-    #free_batch_idx, free_edge_idx = first_available_edge_idx(edges)
-    '''
 
 
 def pack_hidden(hidden, B, max_edges, edge_fill=-1, weight_fill=1.0):
@@ -243,7 +212,7 @@ def unpack_hidden(hidden, B):
     return nodes, flat_edges, flat_weights, T
 
 
-@torch.jit.script
+#@torch.jit.script
 def _pack_hidden(
     nodes: torch.Tensor, 
     edges: torch.Tensor, 
@@ -290,7 +259,7 @@ def _pack_hidden(
     return nodes, dense_edges, dense_weights, T
 
 
-@torch.jit.script
+#@torch.jit.script
 def _unpack_hidden(
     nodes: torch.Tensor, 
     edges: torch.Tensor, 
@@ -299,7 +268,7 @@ def _unpack_hidden(
     B: int):
     """Converts dense hidden states to a sparse representation
     
-    Unflatten edges from [2, k* NE] to [B, 2, max_edges].  In other words, prep
+    Flatten edges from [B, 2, max_edges] to [2, k * NE].  In other words, prep
     edges and weights for dense transport (ray).
 
     Returns edges [B,2,NE] and weights [B,1,NE]"""
@@ -317,15 +286,15 @@ def _unpack_hidden(
     )
     # Filter invalid edges (those that were < 0 originally)
     # Swap dims (B,2,NE) => (2,B,NE)
-    mask = (offset_edges >= edge_offsets).permute(1,0,2)
-    stacked_mask = (mask[0] & mask[1]).unsqueeze(0).expand(2,-1,-1)
+    mask = (offset_edges >= edge_offsets)# Shape [B,2,max_edge]  
+    weight_mask = (mask[:,0] * mask[:,1]).unsqueeze(1) # Shape [B,1,max_edge] 
+    edge_mask = weight_mask.expand(-1,2,-1)
+    #stacked_mask = (mask[0] & mask[1]).unsqueeze(0).expand(2,-1,-1)
     # Now filter edges, weights, and indices using masks
-    # Careful, mask select will automatically flatten
-    # so do it last, this squeezes from from (2,B,NE) => (2,B*NE)
-    flat_edges = edges.permute(1,0,2).masked_select(stacked_mask).reshape(2,-1)
-    flat_weights = weights.masked_select(stacked_mask[0]).flatten()
-    flat_B_idx = offset_edges_B_idx.masked_select(stacked_mask[0].flatten())
-        
+    # this squeezes from from (2,B,NE) => (2,B*NE)
+    flat_edges = offset_edges.masked_select(edge_mask).reshape(-1, 2).T
+    flat_weights = weights.masked_select(weight_mask).flatten()
+    flat_B_idx = offset_edges_B_idx.masked_select(weight_mask.flatten())
 
     return nodes, flat_edges, flat_weights, T, flat_B_idx
 
