@@ -232,10 +232,6 @@ def _unpack_hidden(
     edges and weights for dense transport (ray).
 
     Returns edges [B,2,NE] and weights [B,1,NE]"""
-    # TODO BUG HERE:
-    # taus = [1], T = [3]
-    # [0,0,1] [1,2,2] => [0,1,2] [0,1,2]
-
     # Get masks for valid edges/weights
     mask = (edges >= 0) # Shape [B,2,max_edge]  
     weight_mask = (mask[:,0] * mask[:,1]).unsqueeze(1) # Shape [B,1,max_edge] 
@@ -256,8 +252,8 @@ def _unpack_hidden(
 
     # Now filter edges, weights, and indices using masks
     # this squeezes from from (2,B,NE) => (2,B*NE)
-    # We permute to get the correct ordering, otherwise
-    # edges are incorrect
+    # We permute to put the in/out index in the first dimension,
+    # otherwise edge ordering is incorrect
     flat_edges = offset_edges.permute(1,0,2).masked_select(edge_mask.permute(1,0,2)).reshape(2, -1)
     flat_weights = weights.permute(1,0,2).masked_select(weight_mask.permute(1,0,2)).flatten()
     flat_B_idx = offset_edges_B_idx.masked_select(weight_mask.flatten())
