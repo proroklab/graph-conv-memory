@@ -241,7 +241,7 @@ class TestDenseVsSparse(unittest.TestCase):
 
     def test_no_edges(self):
         F = self.F
-        B = 2
+        B = 3
         N = 5
         ts = 4 
         self.obs = torch.arange(B * ts * F, dtype=torch.float32).reshape(B, ts, F)
@@ -254,6 +254,19 @@ class TestDenseVsSparse(unittest.TestCase):
             dense_outs.append(dense_out)
         dense_outs = torch.stack(dense_outs, dim=1)
 
+        # One step at at ime
+        self.sparse_step = SparseGCM(self.sparse_g, graph_size=8)
+        sparse_step_hidden = None
+        sparse_step_outs = []
+        for i in range(ts):
+            taus = torch.ones(B, dtype=torch.long)
+            sparse_step_out, sparse_step_hidden = self.sparse_gcm(
+                self.obs[:,i].unsqueeze(1), taus, sparse_step_hidden
+            )
+            sparse_step_outs.append(sparse_step_out)
+        sparse_step_outs = torch.cat(sparse_step_outs, dim=1)
+
+        # All at once
         taus = torch.ones(B, dtype=torch.long) * ts
         sparse_outs, sparse_hidden = self.sparse_gcm(self.obs, taus, None)
 
@@ -264,8 +277,14 @@ class TestDenseVsSparse(unittest.TestCase):
         if not torch.all(hidden[0] == sparse_hidden[0]):
             self.fail(f"{hidden[0]} != {sparse_hidden[0]}")
 
-        if not torch.all(dense_outs.flatten() == sparse_outs.flatten()):
+        if not torch.all(hidden[0] == sparse_step_hidden[0]):
+            self.fail(f"{hidden[0]} != {sparse_step_hidden[0]}")
+
+        if not torch.all(dense_outs == sparse_outs):
             self.fail(f"{dense_outs} != {sparse_outs}")
+
+        if not torch.all(dense_outs == sparse_step_outs):
+            self.fail(f"{dense_outs} != {sparse_step_outs}")
 
     def test_temporal_edges(self):
         self.dense_gcm = DenseGCM(self.dense_g, edge_selectors=TemporalBackedge([1,2]), graph_size=8)
@@ -308,8 +327,10 @@ class TestDenseVsSparse(unittest.TestCase):
     def test_learning_temporal_edges(self):
         self.dense_gcm = DenseGCM(self.dense_g, edge_selectors=TemporalBackedge([1,2]), graph_size=8)
         self.sparse_gcm = SparseGCM(self.sparse_g, edge_selectors=TemporalEdge([1,2]), graph_size=8)
+        self.sparse_step = SparseGCM(self.sparse_g, edge_selectors=TemporalEdge([1,2]), graph_size=8)
         d_opt = torch.optim.Adam(self.dense_gcm.parameters())
         s_opt = torch.optim.Adam(self.sparse_gcm.parameters())
+        ss_opt = torch.optim.Adam(self.sparse_step.parameters())
         F = self.F
         B = 3
         N = 5
@@ -319,6 +340,7 @@ class TestDenseVsSparse(unittest.TestCase):
         for i in range(num_iters):
             d_opt.zero_grad()
             s_opt.zero_grad()
+            ss_opt.zero_grad()
             self.obs = torch.rand((B, ts, F), dtype=torch.float32)
 
             dense_outs = []
@@ -329,18 +351,26 @@ class TestDenseVsSparse(unittest.TestCase):
                 dense_outs.append(dense_out)
             dense_outs = torch.stack(dense_outs, dim=1)
 
+            # One step sparse
+            sparse_step_hidden = None
+            sparse_step_outs = []
+            for i in range(ts):
+                taus = torch.ones(B, dtype=torch.long)
+                sparse_step_out, sparse_step_hidden = self.sparse_gcm(
+                    self.obs[:,i].unsqueeze(1), taus, sparse_step_hidden
+                )
+                sparse_step_outs.append(sparse_step_out)
+            sparse_step_outs = torch.cat(sparse_step_outs, dim=1)
+            
+            # Time batched sparse
             taus = torch.ones(B, dtype=torch.long) * ts
             sparse_outs, sparse_hidden = self.sparse_gcm(self.obs, taus, None)
 
             if dense_outs.numel() != sparse_outs.numel():
                 self.fail(f"sizes {dense_outs.numel()} != {sparse_outs.numel()}")
 
-            # Dense edges
-            # [1,0], [2,1], [3,2] for each batch
-            # Sparse edges
-            # [0,1], [1,2], [2,3]
-
-            dense_adj_idxs = dense_hidden[1].nonzero().T
+            if dense_outs.numel() != sparse_step_outs.numel():
+                self.fail(f"sizes {dense_outs.numel()} != {sparse_step_outs.numel()}")
 
             # Check hiddens
             if not torch.all(dense_hidden[0] == sparse_hidden[0]):
@@ -355,7 +385,7 @@ class TestDenseVsSparse(unittest.TestCase):
             s_opt.step()
 
             for k, v in self.sparse_g.state_dict().items():
-                if not torch.allclose(v, self.dense_g.state_dict()[k], rtol=.01, atol=.01):
+                if not torch.allclose(v, self.dense_g.state_dict()[k], atol=.01):
                     self.fail(
                         f'Parameters diverged: {v}, {self.dense_g.state_dict()[k]}'
                     )
