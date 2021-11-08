@@ -2,21 +2,16 @@ import torch
 import numpy as np
 import gym
 from torch import nn
-from typing import Union, Dict, List, Tuple, Any
-import ray
+from typing import Dict, Tuple, List
 from ray.rllib.models.torch.torch_modelv2 import TorchModelV2
-from ray.rllib.models.torch.fcnet import FullyConnectedNetwork as TorchFC
 from ray.rllib.models.torch.misc import SlimFC, normc_initializer
-from ray.rllib.models.torch.recurrent_net import RecurrentNetwork
 from ray.rllib.utils.typing import ModelConfigDict, TensorType
-from ray.rllib.policy.sample_batch import SampleBatch
 from ray.rllib.policy.view_requirement import ViewRequirement
 from ray.rllib.utils.torch_ops import one_hot
 from ray.rllib.policy.rnn_sequencing import add_time_dimension
 
 import torch_geometric
-from torch_geometric.data import Data, Batch
-from gcm.gcm import DenseGCM, PositionalEncoding, RelativePositionalEncoding
+from gcm.gcm import PositionalEncoding
 from gcm.sparse_gcm import SparseGCM
 from gcm import util
 
@@ -139,7 +134,7 @@ class RaySparseGCM(TorchModelV2, nn.Module):
             edge_selectors=self.cfg["edge_selectors"],
             aux_edge_selectors=self.cfg["aux_edge_selectors"],
             positional_encoder=pe,
-            max_hops=cfg["max_hops"]
+            max_hops=cfg["max_hops"],
         )
 
         self.logit_branch = SlimFC(
@@ -186,11 +181,7 @@ class RaySparseGCM(TorchModelV2, nn.Module):
         else:
             flat = input_dict["obs_flat"]
 
-        dense = add_time_dimension(
-            flat, 
-            max_seq_len=seq_lens.max(), 
-            framework="torch"
-        )
+        dense = add_time_dimension(flat, max_seq_len=seq_lens.max(), framework="torch")
         # TODO: ppo sequencing is broken (rllib bug not ours)
         # Batch and Time
         B = dense.shape[0]
@@ -200,7 +191,6 @@ class RaySparseGCM(TorchModelV2, nn.Module):
             taus = torch.from_numpy(seq_lens).to(dense.device).long()
         else:
             taus = seq_lens.long()
-
 
         # We cannot set non-zero values in get_initial_state
         # so do it here instead, fill -1 and 1 for edges and weights respectively

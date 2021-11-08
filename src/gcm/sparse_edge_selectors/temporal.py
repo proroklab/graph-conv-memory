@@ -2,9 +2,10 @@ import torch
 import ray
 from typing import List, Any, Tuple, Union
 
-from torchtyping import TensorType, patch_typeguard
-from typeguard import typechecked
+from torchtyping import TensorType, patch_typeguard  # type: ignore
+from typeguard import typechecked  # type: ignore
 from gcm import util
+
 patch_typeguard()
 
 
@@ -16,52 +17,44 @@ class TemporalEdge(torch.nn.Module):
         self.hops = torch.tensor(hops)
 
     @typechecked
-    def forward(self, 
-            nodes: TensorType["B", "N", "feat", float],
-            T: TensorType["B", int], 
-            taus: TensorType["B", int],
-            B: int,
-    ) -> Tuple[
-            TensorType[2, "NE", int], 
-            TensorType["NE", float],
-        ]:
+    def forward(
+        self,
+        nodes: TensorType["B", "N", "feat", float],  # type: ignore # noqa: F821
+        T: TensorType["B", int],  # type: ignore # noqa: F821
+        taus: TensorType["B", int],  # type: ignore # noqa: F821
+        B: int,
+    ) -> Tuple[TensorType[2, "NE", int], TensorType["NE", float]]:  # type: ignore # noqa: F821
         # Connect each [t in T to T + tau] to [t - h for h in hops]
 
-        # TODO: also get rid of invalid (-1, -2, ...) edges
         batch_offsets = util.get_batch_offsets(T, taus)
-        edge_base = []
-        edge_base_offsets = []
+        edge_base: Union[List, torch.Tensor] = []
+        edge_base_offsets: Union[List, torch.Tensor] = []
 
         # Build a base of edges (x - hop for all hops)
         # then we add the batch offsets to them
         for b in range(B):
-            edge_base.append(
-                torch.arange(
-                    T[b], T[b] + taus [b], device=nodes.device
-                ) 
-            )
+            edge_base.append(torch.arange(T[b], T[b] + taus[b], device=nodes.device))
 
             edge_base_offsets.append(
-                batch_offsets[b] * torch.ones(
-                    taus[b], device=nodes.device, dtype=torch.long
-                ) 
+                batch_offsets[b]
+                * torch.ones(taus[b], device=nodes.device, dtype=torch.long)
             )
 
         # No edges to add
         if len(edge_base) < 1:
-            empty_edges = torch.empty((2,0), device=nodes.device, dtype=torch.long)
+            empty_edges = torch.empty((2, 0), device=nodes.device, dtype=torch.long)
             empty_weights = torch.empty((0), device=nodes.device, dtype=torch.float)
             return empty_edges, empty_weights
 
         edge_base = torch.cat(edge_base)
         edge_base_offsets = torch.cat(edge_base_offsets)
-        edge_ends = edge_base.unsqueeze(-1).repeat(1, len(self.hops)) 
+        edge_ends = edge_base.unsqueeze(-1).repeat(1, len(self.hops))
 
         edge_starts = edge_ends - self.hops.to(nodes.device)
         edge_starts = edge_starts.flatten()
         edge_ends = edge_ends.flatten()
         # Remove invalid edges (<0) before we add offsets
-        mask = (edge_starts >= 0)
+        mask = edge_starts >= 0
         # Offset edges
         edge_starts = edge_starts + edge_base_offsets.repeat_interleave(len(self.hops))
         edge_ends = edge_ends + edge_base_offsets.repeat_interleave(len(self.hops))

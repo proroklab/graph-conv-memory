@@ -40,12 +40,7 @@ class TestRaySanity(unittest.TestCase):
                     "gnn": dgc,
                     "edge_selectors": TemporalBackedge([1]),
                     "edge_weights": False,
-                }
-            }
+                },
+            },
         }
-        tune.run(
-            "A2C",
-            config=cfg,
-            stop={"info/num_steps_trained": 100}
-        )
-
+        tune.run("A2C", config=cfg, stop={"info/num_steps_trained": 100})

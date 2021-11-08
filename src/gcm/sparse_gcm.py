@@ -3,8 +3,9 @@ import torch_geometric
 from gcm import util
 from typing import Union, Tuple, List
 
-from torchtyping import TensorType, patch_typeguard
+from torchtyping import TensorType, patch_typeguard  # type: ignore
 from typeguard import typechecked
+
 patch_typeguard()
 
 
@@ -68,27 +69,27 @@ class SparseGCM(torch.nn.Module):
 
     @typechecked
     def forward(
-        self, 
-        x: TensorType["B","t","feat", float],         # input observations
-        taus: TensorType["B", int],                   # sequence_lengths
-        hidden: Union[
-            None, 
+        self,
+        x: TensorType["B", "t", "feat", float],  # type: ignore # noqa: F821 #input observations
+        taus: TensorType["B", int],  # type: ignore # noqa: F821 #sequence_lengths
+        hidden: Union[  # type: ignore # noqa: F821
+            None,
             Tuple[
-                TensorType["B", "N", "feats", float], # Nodes
-                TensorType[2, "E", int],              # Edges
-                TensorType["E", float],               # Weights
-                TensorType["B", int],                 # T
-            ]
-        ]
-    ) -> Tuple[
-        torch.Tensor, 
-            Tuple[
-                TensorType["B", "N", "feats", float],  # Nodes
-                TensorType[2, "NE", int],              # Edges
-                TensorType["NE", float],               # Weights
-                TensorType["B", int]                   # T
-            ]
-        ]:
+                TensorType["B", "N", "feats", float],  # noqa: F821 # Nodes
+                TensorType[2, "E", int],  # noqa: F821 # Edges
+                TensorType["E", float],  # noqa: F821 # Weights
+                TensorType["B", int],  # noqa: F821 #T
+            ],
+        ],
+    ) -> Tuple[  # type: ignore
+        torch.Tensor,
+        Tuple[
+            TensorType["B", "N", "feats", float],  # noqa: F821 # Nodes
+            TensorType[2, "NE", int],  # noqa: F821 # Edges
+            TensorType["NE", float],  # noqa: F821 # Weights
+            TensorType["B", int],  # noqa: F821 # T
+        ],
+    ]:
         """Add a memory x with temporal size tau to the graph, and query the memory for it.
         B = batch size
         N = maximum graph size
@@ -98,7 +99,7 @@ class SparseGCM(torch.nn.Module):
         E = number of edge pairs
         """
         # Base case
-        if hidden == None:
+        if hidden is None:
             hidden = self.get_initial_hidden_state(x)
 
         nodes, edges, weights, T = hidden
@@ -112,25 +113,22 @@ class SparseGCM(torch.nn.Module):
 
         nodes = nodes.clone()
         # Add new nodes to the current graph
-        assert torch.all(edges[0] < edges[1]), 'Edges violate causality'
+        assert torch.all(edges[0] < edges[1]), "Edges violate causality"
         # TODO: Wrap around instead of terminating
         if tau_idxs.max() >= N:
-            raise Exception('Overflow')
+            raise Exception("Overflow")
 
         nodes[B_idxs, tau_idxs] = x[dense_B_idxs, dense_tau_idxs]
 
         # We do not want to modify graph nodes in the GCM
-        # Do all mutation operations on dirty_nodes, 
+        # Do all mutation operations on dirty_nodes,
         # then use clean nodes in the graph state
         dirty_nodes = nodes.clone()
 
         if self.edge_selectors:
-            new_edges, new_weights = self.edge_selectors(
-                dirty_nodes, T, taus, B
-            )
+            new_edges, new_weights = self.edge_selectors(dirty_nodes, T, taus, B)
             edges = torch.cat((edges, new_edges), dim=-1)
             weights = torch.cat((weights, new_weights), dim=-1)
-
 
         # Thru network
         if self.preprocessor:
@@ -148,11 +146,19 @@ class SparseGCM(torch.nn.Module):
             edges, weights = torch_geometric.utils.coalesce(edges, weights)
         if self.max_hops is not None:
             raise NotImplementedError("Max_hops is not yet implemented")
-            subnodes, subedges, node_map, edge_mask = torch_geometric.utils.k_hop_subgraph(
-                output_node_idxs, self.max_hops, edges, num_nodes=output_node_idxs.shape[0]
+            (
+                subnodes,
+                subedges,
+                node_map,
+                edge_mask,
+            ) = torch_geometric.utils.k_hop_subgraph(
+                output_node_idxs,
+                self.max_hops,
+                edges,
+                num_nodes=output_node_idxs.shape[0],
             )
-            #import ray
-            #ray.util.pdb.set_trace()
+            # import ray
+            # ray.util.pdb.set_trace()
         node_feats = self.gnn(flat_nodes, edges, weights)
         # Extract the hidden repr at the new nodes
         # Each mx is variable in temporal dim, so return 2D tensor of [B*tau, feat]

@@ -62,11 +62,13 @@ class RelativePositionalEncoding(torch.nn.Module):
         # Dim must be even
         d_model = math.ceil(nodes.shape[-1] / 2) * 2
         position = torch.arange(self.max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model)
+        )
         pe = torch.zeros(self.max_len, d_model, device=nodes.device)
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
+        self.register_buffer("pe", pe)
 
     def forward(self, nodes: torch.Tensor, num_nodes: torch.Tensor) -> torch.Tensor:
         """
@@ -76,24 +78,22 @@ class RelativePositionalEncoding(torch.nn.Module):
         """
         if not hasattr(self, "pe"):
             self.run_once(nodes)
-        
+
         B = nodes.shape[0]
         for b in range(B):
             center = num_nodes[b]
             pe = self.pe.roll(int(center), 0)
-            nodes[b, :center + 1] = (
-                nodes[b, :center + 1] + 
-                pe[:center + 1,:nodes.shape[-1]]
+            nodes[b, : center + 1] = (
+                nodes[b, : center + 1] + pe[: center + 1, : nodes.shape[-1]]
             )
         return nodes
-
 
 
 class PositionalEncoding(torch.nn.Module):
     """Embed positional encoding into the graph. Ensures we do not
     encode future nodes (node_idx > num_nodes)"""
 
-    def __init__(self, max_len: int = 5000, mode="add", cat_dim: int=8):
+    def __init__(self, max_len: int = 5000, mode="add", cat_dim: int = 8):
         super().__init__()
         self.max_len = max_len
         self.mode = mode
@@ -104,14 +104,18 @@ class PositionalEncoding(torch.nn.Module):
         # Dim must be even
         d_model = math.ceil(x.shape[-1] / 2) * 2
         position = torch.arange(self.max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model)
+        )
         pe = torch.zeros(self.max_len, d_model, device=x.device)
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
+        self.register_buffer("pe", pe)
 
         if self.mode == "cat":
-            self.reproject = torch.nn.Linear(x.shape[-1], x.shape[-1] - self.cat_dim, device=x.device)
+            self.reproject = torch.nn.Linear(
+                x.shape[-1], x.shape[-1] - self.cat_dim, device=x.device
+            )
 
     def forward(self, x: torch.Tensor, num_nodes: torch.Tensor) -> torch.Tensor:
         """
@@ -121,20 +125,23 @@ class PositionalEncoding(torch.nn.Module):
         """
         if not hasattr(self, "pe"):
             self.run_once(x)
-        
+
         b_idxs, n_idxs = gcm.util.idxs_up_to_including_num_nodes(x, num_nodes)
         if self.mode == "add":
-            x[b_idxs, n_idxs] = x[b_idxs, n_idxs] + self.pe[n_idxs, :x.shape[-1]]
+            x[b_idxs, n_idxs] = x[b_idxs, n_idxs] + self.pe[n_idxs, : x.shape[-1]]
         elif self.mode == "cat":
-            x_reproj = self.reproject(x[b_idxs, n_idxs]).reshape(len(b_idxs), x.shape[-1] - self.cat_dim)
+            x_reproj = self.reproject(x[b_idxs, n_idxs]).reshape(
+                len(b_idxs), x.shape[-1] - self.cat_dim
+            )
             # positional encoding
             x = x.clone()
-            x[b_idxs, n_idxs, :self.cat_dim] = self.pe[n_idxs, :self.cat_dim]
+            x[b_idxs, n_idxs, : self.cat_dim] = self.pe[n_idxs, : self.cat_dim]
             # Reprojected feature assignment
-            x[b_idxs, n_idxs, self.cat_dim:] = x_reproj
+            x[b_idxs, n_idxs, self.cat_dim :] = x_reproj
         else:
             raise NotImplementedError("Invalid mode")
         return x
+
 
 @torch.jit.script
 def overflow(num_nodes: torch.Tensor, N: int):
@@ -204,7 +211,11 @@ class DenseGCM(torch.nn.Module):
         return nodes, edges, weights, num_nodes
 
     def forward(
-        self, x, hidden: Union[None, Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]
+        self,
+        x,
+        hidden: Union[
+            None, Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+        ],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Add a memory x to the graph, and query the memory for it.
         B = batch size
@@ -227,7 +238,7 @@ class DenseGCM(torch.nn.Module):
             )
         """
         # Base case
-        if hidden == None:
+        if hidden is None:
             hidden = self.get_initial_hidden_state(x)
 
         nodes, adj, weights, num_nodes = hidden
@@ -262,12 +273,12 @@ class DenseGCM(torch.nn.Module):
         # starting at num_nodes
         nodes[B_idx, num_nodes[B_idx]] = x[B_idx]
         # We do not want to modify graph nodes in the GCM
-        # Do all mutation operations on dirty_nodes, 
+        # Do all mutation operations on dirty_nodes,
         # then use clean nodes in the graph state
         dirty_nodes = nodes.clone()
         # Do NOT add self edges or they will be counted twice using
         # GraphConv
-        
+
         # Adj and weights must be cloned as
         # edge selectors will modify them in-place
         if self.edge_selectors:
@@ -278,12 +289,16 @@ class DenseGCM(torch.nn.Module):
         # Thru network
         if self.preprocessor:
             dirty_nodes = self.preprocessor(dirty_nodes)
-        #if self.positional_encoder:
+        # if self.positional_encoder:
         #   dirty_nodes = self.positional_encoder(dirty_nodes, num_nodes)
         if self.aux_edge_selectors:
             if self.positional_encoder:
                 adj, weights = self.aux_edge_selectors(
-                    self.positional_encoder(dirty_nodes, num_nodes), adj.clone(), weights.clone(), num_nodes, B
+                    self.positional_encoder(dirty_nodes, num_nodes),
+                    adj.clone(),
+                    weights.clone(),
+                    num_nodes,
+                    B,
                 )
             else:
                 adj, weights = self.aux_edge_selectors(
@@ -317,8 +332,8 @@ class DenseGCM(torch.nn.Module):
         # Shift node matrix into the past
         # by one and forget the zeroth node
         overflowing_batches = overflow_mask.nonzero().squeeze()
-        #nodes = nodes.clone()
-        #adj = adj.clone()
+        # nodes = nodes.clone()
+        # adj = adj.clone()
         # Zero entries before shifting
         nodes[overflowing_batches, 0] = 0
         adj[overflowing_batches, 0, :] = 0
@@ -329,7 +344,7 @@ class DenseGCM(torch.nn.Module):
             adj[overflowing_batches], (-1, -1), (-1, -2)
         )
         if weights.numel() != 0:
-            #weights = weights.clone()
+            # weights = weights.clone()
             weights[overflowing_batches, 0, :] = 0
             weights[overflowing_batches, :, 0] = 0
             weights[overflowing_batches] = torch.roll(

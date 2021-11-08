@@ -5,7 +5,7 @@ import gcm.util
 
 
 class LearnedEdge(torch.nn.Module):
-    """An edge selector where the prior is learned from data. An MLP 
+    """An edge selector where the prior is learned from data. An MLP
     computes logits which create edges via either sampling or sparsemax."""
 
     def __init__(
@@ -78,7 +78,9 @@ class LearnedEdge(torch.nn.Module):
         # Load logits into [B, nodes] matrix and set unfilled entries to large
         # negative value so unfilled entries don't affect spardmax
         # then spardmax per-batch (dim=-1)
-        shaped_logits = torch.empty((B, torch.max(num_nodes)), device=nodes.device).fill_(-1e10)
+        shaped_logits = torch.empty(
+            (B, torch.max(num_nodes)), device=nodes.device
+        ).fill_(-1e10)
         shaped_logits[b_idxs, past_idxs] = logits
         if self.deterministic:
             edges = self.sm(shaped_logits)
@@ -93,7 +95,7 @@ class LearnedEdge(torch.nn.Module):
         # Reindexing edges in this manner ensures even if the edge network
         # went beyond -10e20 and set an invalid edge, it will not be used
         # at most, it affects the scaling for the valid edges
-        # 
+        #
         # Ensure we don't overwrite 1's in adj in case we have more than one
         # edge selector
         # We don't want to add the old adj to the new adj,
@@ -116,4 +118,3 @@ class LearnedEdge(torch.nn.Module):
 
         new_adj = self.compute_new_adj(nodes, num_nodes, adj, B)
         return new_adj, weights
-

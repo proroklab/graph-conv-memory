@@ -28,7 +28,7 @@ class TestPositionalEncoding(unittest.TestCase):
             max_len=N,
             mode="add",
         )
-        #self.s = DenseGCM(self.g, positional_encoder=self.pe)
+        # self.s = DenseGCM(self.g, positional_encoder=self.pe)
 
         self.nodes = torch.zeros(batches, N, feats)
         self.obs = torch.ones(batches, feats)
@@ -38,21 +38,21 @@ class TestPositionalEncoding(unittest.TestCase):
 
     def test_pos_enc_add(self):
         enc = self.pe(self.nodes.clone(), self.num_nodes)
-        if not torch.all(enc[0,1,:] == 0):
+        if not torch.all(enc[0, 1, :] == 0):
             self.fail("Off by one error in encoder (overflow)")
 
-        if torch.all(enc[0,0,:] == 0):
+        if torch.all(enc[0, 0, :] == 0):
             self.fail("Off by one error in encoder (underflow)")
 
         # PE(x,2i) = sin(x/10000^(2i/D))
         # PE(x,2i+1) = cos(x/10000^(2i/D))
-        # 
+        #
         # Zeroth row:
         # PE(x=0,2i=0)   = sin(0/1)             = 0
         # PE(x=0,2i+1=1) = cos(0/1)             = pi/2
         # PE(x=0,2i=2)   = sin(0/10000^(2/4))   = 0
         # PE(x=0,2i+1=3) = cos(0/10000^(2/4)    = pi/2
-        # 
+        #
         # First row:
         # Note we must have 2i so its /6 instead of /5
         # PE(x=1,2i=0)   = sin 1/10000^(0/6)
@@ -61,28 +61,28 @@ class TestPositionalEncoding(unittest.TestCase):
         # PE(x=1,2i+1=3) = cos 1/10000^(2/6)
         # PE(x=1,2i=2)   = sin 1/10000^(4/6)
 
-        sin_actual = enc[0,0,::2]
-        sin_desired = torch.zeros_like(enc[0,0,::2])
-        cos_actual = enc[0,0,1::2]
-        cos_desired = torch.ones_like(enc[0,0,1::2]) 
+        sin_actual = enc[0, 0, ::2]
+        sin_desired = torch.zeros_like(enc[0, 0, ::2])
+        cos_actual = enc[0, 0, 1::2]
+        cos_desired = torch.ones_like(enc[0, 0, 1::2])
 
         if torch.abs(sin_actual - sin_desired).sum() > 0.01:
             self.fail(f"Sine zeroth row desired {sin_desired} actual {sin_actual}")
-        if torch.abs(cos_actual -  cos_desired).sum() > 0.01:
+        if torch.abs(cos_actual - cos_desired).sum() > 0.01:
             self.fail(f"Cosine zeroth row desired {cos_desired} actual {cos_actual}")
 
         enc = self.pe(self.nodes.clone(), self.num_nodes + 1)
         desired = torch.tensor(
             [
-                math.sin( (1/10000)**(0/6)),
-                math.cos( (1/10000)**(0/6)),
-                math.sin( (1/10000)**(2/6)),
-                math.cos( (1/10000)**(2/6)),
-                math.sin((1/10000)**(4/6)),
+                math.sin((1 / 10000) ** (0 / 6)),
+                math.cos((1 / 10000) ** (0 / 6)),
+                math.sin((1 / 10000) ** (2 / 6)),
+                math.cos((1 / 10000) ** (2 / 6)),
+                math.sin((1 / 10000) ** (4 / 6)),
             ]
         )
 
-        if torch.abs(enc[0,1] - desired).sum() > 0.01:
+        if torch.abs(enc[0, 1] - desired).sum() > 0.01:
             self.fail(f"Desired {desired} actual {enc[0,1]}")
 
 
@@ -370,7 +370,7 @@ class TestDenseGCM(unittest.TestCase):
         )
 
         if len(weights) != 0:
-            self.fail(f"Weights should be none, is {weights}") 
+            self.fail(f"Weights should be none, is {weights}")
 
     def test_zeroth_entry(self):
         # Ensure first obs ends up in nodes matrix
@@ -628,7 +628,6 @@ class TestTemporalEdge(unittest.TestCase):
         adj.sum().backward()
 
 
-
 class TestDoubleEdge(unittest.TestCase):
     def setUp(self):
         feats = 11
@@ -649,18 +648,15 @@ class TestDoubleEdge(unittest.TestCase):
             [
                 (
                     TemporalBackedge([1]),
-                    "x, adj, weights, num_nodes, B -> adj, weights"
+                    "x, adj, weights, num_nodes, B -> adj, weights",
                 ),
                 (
                     TemporalBackedge([2]),
-                    "x, adj, weights, num_nodes, B -> adj, weights"
+                    "x, adj, weights, num_nodes, B -> adj, weights",
                 ),
-            ]
+            ],
         )
-        self.s = DenseGCM(
-            self.g, 
-            edge_selectors=es
-        )
+        self.s = DenseGCM(self.g, edge_selectors=es)
 
         self.nodes = torch.zeros(batches, N, feats, dtype=torch.float)
         self.obs = torch.zeros(batches, feats)
@@ -684,6 +680,7 @@ class TestDoubleEdge(unittest.TestCase):
         adj, weights = self.s.edge_selectors(nodes, adj, weights, num_nodes, 5)
         nodes.mean().backward()
         self.optimizer.step()
+
 
 class TestDistanceEdge(unittest.TestCase):
     def setUp(self):
@@ -738,7 +735,9 @@ class TestDistanceEdge(unittest.TestCase):
         )
 
     def test_learned_edge(self):
-        self.s = DenseGCM(self.g, edge_selectors=EuclideanEdge(max_distance=1, learned=True))
+        self.s = DenseGCM(
+            self.g, edge_selectors=EuclideanEdge(max_distance=1, learned=True)
+        )
         self.obs = torch.ones_like(self.obs)
 
         _, (nodes, adj, weights, num_nodes) = self.s(
@@ -756,8 +755,7 @@ class TestDistanceEdge(unittest.TestCase):
         adj, weights = e(self.nodes, self.adj, self.weights, self.num_nodes, B=5)
 
         if not self.nodes.requires_grad:
-            self.fail(f"Nodes has no grad")
-
+            self.fail("Nodes has no grad")
 
 
 class TestDenseEdge(unittest.TestCase):
@@ -843,9 +841,9 @@ class TestLearnedEdge(unittest.TestCase):
         self.num_nodes = torch.zeros(batches, dtype=torch.long)
 
     def test_compute_new_adj_deterministic_grad(self):
-        self.num_nodes = torch.tensor((2,3), dtype=torch.long)
+        self.num_nodes = torch.tensor((2, 3), dtype=torch.long)
         es = LearnedEdge(5, deterministic=True)
-        self.nodes.requires_grad=True
+        self.nodes.requires_grad = True
         adj, weights = es(self.nodes, self.adj, self.weights, self.num_nodes, 2)
 
         self.assertTrue(adj.requires_grad)
@@ -853,7 +851,7 @@ class TestLearnedEdge(unittest.TestCase):
     def test_compute_new_adj_grad(self):
         p = torch.nn.Parameter(torch.tensor([1.0]))
         self.nodes = self.nodes * p
-        self.num_nodes = torch.tensor((2,3), dtype=torch.long)
+        self.num_nodes = torch.tensor((2, 3), dtype=torch.long)
         es = LearnedEdge(5, deterministic=False)
         adj, weights = es(self.nodes, self.adj, self.weights, self.num_nodes, 2)
 
@@ -861,7 +859,7 @@ class TestLearnedEdge(unittest.TestCase):
         optimizer = torch.optim.Adam(es.parameters(), lr=0.005)
         self.nodes.sum().backward()
         optimizer.step()
-        grads = [p.grad for p in es.parameters()]
+        # grads = [p.grad for p in es.parameters()]
 
     """
     def test_diff_or(self):
@@ -908,7 +906,6 @@ class TestLearnedEdge(unittest.TestCase):
         if torch.any(desired != adj):
             self.fail(f"{desired} != {adj}")
     """
-
 
     '''
     def test_weight_to_adj(self):
@@ -1007,19 +1004,13 @@ class TestLearnedEdge(unittest.TestCase):
             "nodes, adj, weights, num_nodes, B",
             [
                 (
-                    TemporalBackedge(), 
-                    "nodes, adj, weights, num_nodes, B -> adj, weights"
+                    TemporalBackedge(),
+                    "nodes, adj, weights, num_nodes, B -> adj, weights",
                 ),
-                (
-                    LearnedEdge(5),
-                    "nodes, adj, weights, num_nodes, B -> adj, weights"
-                ),
-            ]
+                (LearnedEdge(5), "nodes, adj, weights, num_nodes, B -> adj, weights"),
+            ],
         )
-        self.s = DenseGCM(
-            self.g, 
-            edge_selectors=selector
-        )
+        self.s = DenseGCM(self.g, edge_selectors=selector)
         out, (nodes, adj, weights, num_nodes) = self.s(
             self.obs, (self.nodes, self.adj, self.weights, self.num_nodes)
         )
