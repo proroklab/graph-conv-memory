@@ -53,9 +53,9 @@ class SparseGCM(torch.nn.Module):
 
         assert x.dim() == 3
         B, _, feats = x.shape
-        edges = torch.zeros(B, 2, 0, device=x.device, dtype=torch.long)
+        edges = torch.zeros(2, 0, device=x.device, dtype=torch.long)
         nodes = torch.zeros(B, self.graph_size, feats, device=x.device)
-        weights = torch.zeros(B, 1, 0, device=x.device)
+        weights = torch.zeros(0, device=x.device)
         T = torch.zeros(B, dtype=torch.long, device=x.device)
 
         return nodes, edges, weights, T
@@ -106,8 +106,7 @@ class SparseGCM(torch.nn.Module):
 
         nodes = nodes.clone()
         # Add new nodes to the current graph
-        # TODO: ensure > rather than geq
-        assert torch.all(edges[0] <= edges[1]), 'Edges violate causality'
+        assert torch.all(edges[0] < edges[1]), 'Edges violate causality'
         # TODO: Wrap around instead of terminating
         if tau_idxs.max() >= N:
             raise Exception('Overflow')
