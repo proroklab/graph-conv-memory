@@ -144,19 +144,6 @@ def get_valid_node_idxs(T: torch.Tensor, taus: torch.Tensor, B: int):
     tau_idxs = torch.cat([torch.arange(0, T[b] + taus[b], device=T.device) for b in range(B)])
     return B_idxs, tau_idxs
 
-def to_dense(mx, T, taus, B):
-    """Compute the dense version of mx.
-
-    The output of sparse_gcm.forward returns mx of shape
-    [B*taus, feat]. But in some cases (like rllib) we want
-    to return a zero-padded tensor of shape [B, max(taus), feat]
-    instead. This fn returns a zero-padded version of said tensor."""
-    dense_B_idxs, dense_tau_idxs = get_nonpadded_idxs(T, taus, B)
-    dense_mx = torch.zeros((B, taus.max(), mx.shape[-1]), device=mx.device)
-    dense_mx[dense_B_idxs, dense_tau_idxs] = mx
-
-    return dense_mx
-
 
 @torch.jit.script
 def get_batch_offsets(T: torch.Tensor, taus: torch.Tensor):
@@ -167,33 +154,6 @@ def get_batch_offsets(T: torch.Tensor, taus: torch.Tensor):
     return batch_offsets
 
     
-'''
-def unique(x, dim=None):
-    """Unique elements of x and indices of those unique elements
-    https://github.com/pytorch/pytorch/issues/36748#issuecomment-619514810
-
-    e.g.
-
-    unique(tensor([
-        [1, 2, 3],
-        [1, 2, 4],
-        [1, 2, 3],
-        [1, 2, 5]
-    ]), dim=0)
-    => (tensor([[1, 2, 3],
-                [1, 2, 4],
-                [1, 2, 5]]),
-        tensor([0, 1, 3]))
-    """
-    unique, inverse = torch.unique(
-        x, sorted=True, return_inverse=True, dim=dim)
-    perm = torch.arange(inverse.size(0), dtype=inverse.dtype,
-                        device=inverse.device)
-    inverse, perm = inverse.flip([0]), perm.flip([0])
-    return unique, inverse.new_empty(unique.size(dim)).scatter_(0, inverse, perm)
-'''
-
-
 def pack_hidden(hidden, B, max_edges, edge_fill=-1, weight_fill=1.0):
     return _pack_hidden(*hidden, B, max_edges, edge_fill=-1, weight_fill=1.0)
 
@@ -238,7 +198,7 @@ def _pack_hidden(
 
     for b in range(B):
         source_mask = (batch_starts[b] <= edges[0]) * (edges[0] < batch_ends[b])
-        sink_mask = (batch_starts[b] <= edges[1]) * (edges[1] < batch_ends[b])
+        sink_mask = (batch_starts[b] < edges[1]) * (edges[1] < batch_ends[b])
         mask = source_mask * sink_mask
 
         # Only if we have edges
@@ -272,6 +232,15 @@ def _unpack_hidden(
     edges and weights for dense transport (ray).
 
     Returns edges [B,2,NE] and weights [B,1,NE]"""
+    # TODO BUG HERE:
+    # taus = [1], T = [3]
+    # [0,0,1] [1,2,2] => [0,1,2] [0,1,2]
+
+    # Get masks for valid edges/weights
+    mask = (edges >= 0) # Shape [B,2,max_edge]  
+    weight_mask = (mask[:,0] * mask[:,1]).unsqueeze(1) # Shape [B,1,max_edge] 
+    edge_mask = weight_mask.expand(-1,2,-1) # [B,2,max_edge]
+
     batch_offsets = T.cumsum(dim=0).roll(1)
     batch_offsets[0] = 0
 
@@ -284,16 +253,13 @@ def _unpack_hidden(
             ) for b in range(B)
         ]
     )
-    # Filter invalid edges (those that were < 0 originally)
-    # Swap dims (B,2,NE) => (2,B,NE)
-    mask = (offset_edges >= edge_offsets)# Shape [B,2,max_edge]  
-    weight_mask = (mask[:,0] * mask[:,1]).unsqueeze(1) # Shape [B,1,max_edge] 
-    edge_mask = weight_mask.expand(-1,2,-1)
-    #stacked_mask = (mask[0] & mask[1]).unsqueeze(0).expand(2,-1,-1)
+
     # Now filter edges, weights, and indices using masks
     # this squeezes from from (2,B,NE) => (2,B*NE)
-    flat_edges = offset_edges.masked_select(edge_mask).reshape(-1, 2).T
-    flat_weights = weights.masked_select(weight_mask).flatten()
+    # We permute to get the correct ordering, otherwise
+    # edges are incorrect
+    flat_edges = offset_edges.permute(1,0,2).masked_select(edge_mask.permute(1,0,2)).reshape(2, -1)
+    flat_weights = weights.permute(1,0,2).masked_select(weight_mask.permute(1,0,2)).flatten()
     flat_B_idx = offset_edges_B_idx.masked_select(weight_mask.flatten())
 
     return nodes, flat_edges, flat_weights, T, flat_B_idx
