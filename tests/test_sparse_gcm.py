@@ -204,11 +204,13 @@ class TestDenseVsSparse(unittest.TestCase):
             "x, adj, weights, B, N",
             [
                 (dense_conv_type(self.F, self.F), "x, adj -> x"),
+                (dense_conv_type(self.F, self.F), "x, adj -> x"),
             ],
         )
         self.sparse_g = torch_geometric.nn.Sequential(
             "x, edges, weights",
             [
+                (sparse_conv_type(self.F, self.F), "x, edges -> x"),
                 (sparse_conv_type(self.F, self.F), "x, edges -> x"),
             ],
         )
@@ -269,9 +271,9 @@ class TestDenseVsSparse(unittest.TestCase):
         self.dense_gcm = DenseGCM(self.dense_g, edge_selectors=TemporalBackedge([1,2]), graph_size=8)
         self.sparse_gcm = SparseGCM(self.sparse_g, edge_selectors=TemporalEdge([1,2]), graph_size=8)
         F = self.F
-        B = 2
+        B = 3
         N = 5
-        ts = 4 
+        ts = 8
         self.obs = torch.arange(B * ts * F, dtype=torch.float32).reshape(B, ts, F)
 
         dense_outs = []
@@ -299,9 +301,59 @@ class TestDenseVsSparse(unittest.TestCase):
         if not torch.all(dense_hidden[0] == sparse_hidden[0]):
             self.fail(f"{hidden[0]} != {sparse_hidden[0]}")
 
-        if not torch.all(dense_outs.flatten() == sparse_outs.flatten()):
+        if not torch.all(dense_outs == sparse_outs):
             self.fail(f"{dense_outs} != {sparse_outs}")
 
+
+    def test_learning_temporal_edges(self):
+        self.dense_gcm = DenseGCM(self.dense_g, edge_selectors=TemporalBackedge([1,2]), graph_size=8)
+        self.sparse_gcm = SparseGCM(self.sparse_g, edge_selectors=TemporalEdge([1,2]), graph_size=8)
+        d_opt = torch.optim.Adam(self.dense_gcm.parameters())
+        s_opt = torch.optim.Adam(self.sparse_gcm.parameters())
+        F = self.F
+        B = 3
+        N = 5
+        ts = 8
+        num_iters = 3
+
+        for i in range(num_iters):
+            d_opt.zero_grad()
+            s_opt.zero_grad()
+            self.obs = torch.arange(B * ts * F, dtype=torch.float32).reshape(B, ts, F)
+
+            dense_outs = []
+
+            dense_hidden = None
+            for i in range(ts):
+                dense_out, dense_hidden = self.dense_gcm(self.obs[:,i], dense_hidden)
+                dense_outs.append(dense_out)
+            dense_outs = torch.stack(dense_outs, dim=1)
+
+            taus = torch.ones(B, dtype=torch.long) * ts
+            sparse_outs, sparse_hidden = self.sparse_gcm(self.obs, taus, None)
+
+            if dense_outs.numel() != sparse_outs.numel():
+                self.fail(f"sizes {dense_outs.numel()} != {sparse_outs.numel()}")
+
+            # Dense edges
+            # [1,0], [2,1], [3,2] for each batch
+            # Sparse edges
+            # [0,1], [1,2], [2,3]
+
+            dense_adj_idxs = dense_hidden[1].nonzero().T
+
+            # Check hiddens
+            if not torch.all(dense_hidden[0] == sparse_hidden[0]):
+                self.fail(f"{hidden[0]} != {sparse_hidden[0]}")
+
+            if not torch.all(dense_outs == sparse_outs):
+                self.fail(f"{dense_outs} != {sparse_outs}")
+
+            d_opt.step()
+            s_opt.step()
+
+            for k, v in self.sparse_g.state_dict().items():
+                self.assertTrue((v == self.dense_g.state_dict()[k]).all())
         
 
 
