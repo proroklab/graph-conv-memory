@@ -197,15 +197,24 @@ class RaySparseGCM(TorchModelV2, nn.Module):
             taus = seq_lens.long()
 
 
+        # We cannot set non-zero values in get_initial_state
+        # so do it here instead, fill -1 and 1 for edges and weights respectively
+        # where T (graph timesteps) is zero
+        init_batch_idx = (state[-1] == 0).nonzero().squeeze()
+        state[1][init_batch_idx] = -1
+        state[2][init_batch_idx] = 1.0
+        '''
+        for b in range(B):
+            if torch.all(state[1][b] == 0):
+                state[1][b].fill_(-1)
+                state[2][b].fill_(1.0)
+        '''
         nodes, edges, weights, T = util.unpack_hidden(state, B)
-        # Initial state
-        if torch.all(weights == 0):
-            weights[:] = 1
+
         edges, T = edges.long(), T.long()
         hidden = (nodes, edges, weights, T)
 
         # Push thru pre-gcm layers
-        #ray.util.pdb.set_trace()
         out, hidden = self.gcm(dense, taus, hidden)
 
         logits = self.logit_branch(out).reshape(B * t, -1)
