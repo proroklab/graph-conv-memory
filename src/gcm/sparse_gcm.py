@@ -30,6 +30,11 @@ class SparseGCM(torch.nn.Module):
         aux_edge_selectors: torch.nn.Module = None,
         # Maximum number of nodes in the graph
         graph_size: int = 128,
+        # Optional maximum hops in the graph. If set,
+        # we will extract the k-hop subgraph for better efficiency.
+        # If set, this should be equal to the number of convolution
+        # layers in the GNN
+        max_hops: Union[int, None] = None,
         # Whether to add sin/cos positional encoding like in transformer
         # to the nodes
         # Creates an ordering in the graph
@@ -43,6 +48,7 @@ class SparseGCM(torch.nn.Module):
         self.edge_selectors = edge_selectors
         self.aux_edge_selectors = aux_edge_selectors
         self.positional_encoder = positional_encoder
+        self.max_hops = max_hops
 
     def get_initial_hidden_state(self, x):
         """Given a dummy x of shape [B, feats], construct
@@ -140,6 +146,13 @@ class SparseGCM(torch.nn.Module):
         flat_nodes, output_node_idxs = util.flatten_nodes(dirty_nodes, T, taus, B)
         if edges.numel() > 0:
             edges, weights = torch_geometric.utils.coalesce(edges, weights)
+        if self.max_hops is not None:
+            raise NotImplementedError("Max_hops is not yet implemented")
+            subnodes, subedges, node_map, edge_mask = torch_geometric.utils.k_hop_subgraph(
+                output_node_idxs, self.max_hops, edges, num_nodes=output_node_idxs.shape[0]
+            )
+            #import ray
+            #ray.util.pdb.set_trace()
         node_feats = self.gnn(flat_nodes, edges, weights)
         # Extract the hidden repr at the new nodes
         # Each mx is variable in temporal dim, so return 2D tensor of [B*tau, feat]

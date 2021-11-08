@@ -45,6 +45,10 @@ class RaySparseGCM(TorchModelV2, nn.Module):
                 torch.nn.Tanh(),
             ],
         ),
+        # If set, max_hops will extract the valid k-hop subgraph before
+        # the forward pass. This will improve runtime if set. It should
+        # be set to the number of graph layers in the GNN
+        "max_hops": None,
         # Torch.nn.module used for determining edges between nodes.
         # You can chain multiple modules together use
         # torch_geometric.nn.Sequential
@@ -135,6 +139,7 @@ class RaySparseGCM(TorchModelV2, nn.Module):
             edge_selectors=self.cfg["edge_selectors"],
             aux_edge_selectors=self.cfg["aux_edge_selectors"],
             positional_encoder=pe,
+            max_hops=cfg["max_hops"]
         )
 
         self.logit_branch = SlimFC(

@@ -210,8 +210,8 @@ def _pack_hidden(
             # More than max edges
             if max_indices < batch_edges.shape[-1]:
                 print(
-                    f'Warning: {max_indices} edges greater than max edges {max_edges} '
-                    f'dropping the first {max_indices - max_edges} edges'
+                    'Warning: Batch has {batch_edges.shape[-1]} edges, which is greater than max'
+                    f'edges ({max_edges}) dropping the first {batch_edges.shape[-1] - max_edges} edges'
                 )
             dense_edges[b,:, :max_indices] = batch_edges[:,:max_indices]
             dense_weights[b, 0, :max_indices] = batch_weights[:max_indices]
