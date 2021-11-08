@@ -210,8 +210,8 @@ class TestDenseVsSparse(unittest.TestCase):
         self.sparse_g = torch_geometric.nn.Sequential(
             "x, edges, weights",
             [
-                (sparse_conv_type(self.F, self.F), "x, edges -> x"),
-                (sparse_conv_type(self.F, self.F), "x, edges -> x"),
+                (sparse_conv_type(self.F, self.F), "x, edges, weights -> x"),
+                (sparse_conv_type(self.F, self.F), "x, edges, weights -> x"),
             ],
         )
         dense_params = self.dense_g.state_dict()
@@ -319,7 +319,7 @@ class TestDenseVsSparse(unittest.TestCase):
         for i in range(num_iters):
             d_opt.zero_grad()
             s_opt.zero_grad()
-            self.obs = torch.arange(B * ts * F, dtype=torch.float32).reshape(B, ts, F)
+            self.obs = torch.rand((B, ts, F), dtype=torch.float32)
 
             dense_outs = []
 
@@ -349,11 +349,16 @@ class TestDenseVsSparse(unittest.TestCase):
             if not torch.all(dense_outs == sparse_outs):
                 self.fail(f"{dense_outs} != {sparse_outs}")
 
+            sparse_outs.mean().backward()
+            dense_outs.mean().backward()
             d_opt.step()
             s_opt.step()
 
             for k, v in self.sparse_g.state_dict().items():
-                self.assertTrue((v == self.dense_g.state_dict()[k]).all())
+                if not torch.allclose(v, self.dense_g.state_dict()[k], rtol=.01, atol=.01):
+                    self.fail(
+                        f'Parameters diverged: {v}, {self.dense_g.state_dict()[k]}'
+                    )
         
 
 
