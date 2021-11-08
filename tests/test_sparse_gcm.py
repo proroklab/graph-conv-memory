@@ -75,6 +75,42 @@ class TestPack(unittest.TestCase):
                     '{initial_packed_hidden[i]) != {repacked_hidden[i]}'
                 )
 
+    def test_unpack_pack_full_empty(self):
+        self.B = 3
+        self.T = torch.tensor([5,0,0])
+        nodes = torch.zeros(self.B, self.graph_size, self.F)
+
+        dense_edge = torch.empty(self.B, 2, self.max_edges, dtype=torch.long).fill_(-1)
+        dense_edge[0,:,0] = torch.tensor([0,1])
+        dense_edge[0,:,1] = torch.tensor([0,2])
+        dense_edge[0,:,2] = torch.tensor([0,3])
+        dense_edge[0,:,3] = torch.tensor([0,4])
+
+        dense_edge[0,:,3] = torch.tensor([1,2])
+        dense_edge[0,:,4] = torch.tensor([1,3])
+        dense_edge[0,:,5] = torch.tensor([1,4])
+
+        dense_edge[0,:,6] = torch.tensor([2,3])
+        dense_edge[0,:,7] = torch.tensor([2,4])
+
+        dense_edge[0,:,8] = torch.tensor([3,4])
+
+        dense_weight = torch.empty(self.B, 1, self.max_edges).fill_(1.0)
+        dense_weight[0,0,0] = 0.5
+        dense_weight[0,0,5] = 0.25
+        initial_packed_hidden = (nodes.clone(), dense_edge.clone(), dense_weight.clone(), self.T.clone())
+
+        packed_hidden = (nodes, dense_edge, dense_weight, self.T)
+        unpacked_hidden = util.unpack_hidden(packed_hidden, self.B)
+        repacked_hidden = util.pack_hidden(unpacked_hidden, self.B, self.max_edges)
+
+        for i in range(len(initial_packed_hidden)):
+            if not (initial_packed_hidden[i] == repacked_hidden[i]).all():
+                self.fail(
+                    f'packed hidden tensor {i} != repacked hidden tensor'
+                    '{initial_packed_hidden[i]) != {repacked_hidden[i]}'
+                )
+
     def test_unpack_pack_ragged(self):
         self.B = 3
         self.T = torch.tensor([5,4,3])
