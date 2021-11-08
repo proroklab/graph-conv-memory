@@ -203,12 +203,6 @@ class RaySparseGCM(TorchModelV2, nn.Module):
         init_batch_idx = (state[-1] == 0).nonzero().squeeze()
         state[1][init_batch_idx] = -1
         state[2][init_batch_idx] = 1.0
-        '''
-        for b in range(B):
-            if torch.all(state[1][b] == 0):
-                state[1][b].fill_(-1)
-                state[2][b].fill_(1.0)
-        '''
         nodes, edges, weights, T = util.unpack_hidden(state, B)
 
         edges, T = edges.long(), T.long()
@@ -217,7 +211,7 @@ class RaySparseGCM(TorchModelV2, nn.Module):
         # Push thru pre-gcm layers
         out, hidden = self.gcm(dense, taus, hidden)
 
-        logits = self.logit_branch(out).reshape(B * t, -1)
+        logits = self.logit_branch(out).reshape(B * t, self.act_dim)
         self.cur_val = self.value_branch(out).reshape(B * t)
 
         packed_state = util.pack_hidden(hidden, B, self.cfg["max_edges"])

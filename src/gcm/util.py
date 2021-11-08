@@ -343,13 +343,11 @@ def flatten_nodes(nodes: torch.Tensor, T: torch.Tensor, taus: torch.Tensor, B: i
     output_node_idxs = torch.cat(
         [
             torch.arange(
-                batch_offsets[b], batch_offsets[b] + taus[b], device=nodes.device
+                batch_offsets[b] + T[b], batch_offsets[b] + T[b] + taus[b], device=nodes.device
             ) for b in range(B)
         ]
     )
     return flat_nodes, output_node_idxs
-
-
 
 
 def flatten_batch(nodes, edges, weights, T, taus, B):
