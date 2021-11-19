@@ -1,8 +1,7 @@
 import torch
 import numpy as np
-import ray
 import torch_geometric
-import sparsemax
+#import sparsemax
 from typing import Tuple, List
 
 
@@ -114,32 +113,116 @@ def get_valid_node_idxs(T: torch.Tensor, taus: torch.Tensor, B: int):
     return B_idxs, tau_idxs
 
 
-@torch.jit.script
-def get_batch_offsets(T: torch.Tensor, taus: torch.Tensor):
-    """Get node offsets into flattened tensor"""
-    # Initial offset is zero, not T + tau, roll into place
-    batch_offsets = (T + taus).cumsum(dim=0).roll(1, 0)
-    batch_offsets[0] = 0
-    return batch_offsets
+#@torch.jit.script
+#def get_node_offsets(T: torch.Tensor):
+#    """Get node offsets into flattened node tensor. Returns two tensors
+#    denoting [start, end] of each batch (inclusive)"""
+#    # Initial offset is zero, not T + tau, roll into place
+#    batch_offsets = T.cumsum(dim=0).roll(1)
+#    batch_offsets[0] = 0
+#    return batch_offsets
+
+def get_batch_offsets(T: torch.Tensor):
+    """Get edge offsets into the flattened edge tensor."""
+    batch_ends = T.cumsum(dim=0)
+    batch_starts = batch_ends.roll(1)
+    batch_starts[0] = 0
+    #batch_starts[1:] += 1
+
+    return batch_starts, batch_ends
 
 
-def pack_hidden(hidden, B, max_edges, edge_fill=-1, weight_fill=1.0):
-    return _pack_hidden(*hidden, B, max_edges, edge_fill=-1, weight_fill=1.0)
+def pack_hidden(hidden, B, max_edges, mode="dense", edge_fill=-1, weight_fill=1.0):
+    assert mode in ["dense", "coo"]
+    if mode == "dense":
+        return _pack_hidden(*hidden, B, max_edges, edge_fill=-1, weight_fill=1.0)
+    else:
+        return _pack_hidden_coo(*hidden, B, max_edges)
 
 
-def unpack_hidden(hidden, B):
-    nodes, flat_edges, flat_weights, T, flat_B_idx = _unpack_hidden(*hidden, B)
-
-    # The following can't be jitted, so it sits in this fn
+def unpack_hidden(hidden, B, mode="dense"):
+    assert mode in ["dense", "coo"]
+    if mode == "dense":
+        nodes, flat_edges, flat_weights, T, _ = _unpack_hidden(*hidden, B)
+    else:
+        nodes, flat_edges, flat_weights, T = _unpack_hidden_coo(*hidden, B)
 
     # Finally, remove duplicate edges and weights
     # but only if we have edges
     if flat_edges.numel() > 0:
+        # The following can't be jitted, so it sits in this fn
         # Make sure idxs are removed alongside edges and weights
-        flat_edges, [flat_weights, flat_B_idx] = torch_geometric.utils.coalesce(
-            flat_edges, [flat_weights, flat_B_idx], reduce="min"
+        flat_edges, flat_weights = torch_geometric.utils.coalesce(
+            flat_edges, flat_weights, reduce="mean"
         )
+
     return nodes, flat_edges, flat_weights, T
+
+
+
+# @torch.jit.script
+def _pack_hidden_coo(
+    nodes: torch.Tensor,
+    edges: torch.Tensor,
+    weights: torch.Tensor,
+    T: torch.Tensor,
+    B: int,
+    max_edges: int=int(1e5),
+):
+    """Converts the hidden states to a torch.sparse_coo representation
+
+    Unflatten edges from [2, k* NE] to [B, 2, max_edges].  Combines edges
+    and weights into a single adjacency matrix
+
+    Returns an updated hidden representation"""
+
+    #batch_base = T.cumsum(dim=0)
+    #batch_starts = batch_ends.roll(1)
+    #batch_starts[0] = 0
+    # nodes, edges, weights, T = hidden
+    """
+    batch_base = T.cumsum(dim=0)
+    batch_starts = batch_base.roll(1)
+    batch_starts[0] = 0
+    batch_ends = batch_base + 1
+    """
+    batch_ends = (T + 1).cumsum(dim=0)
+    batch_starts = batch_ends.roll(1)
+    batch_starts[0] = 0
+    batch_test = T.cumsum(dim=0)
+    batch_test2 = batch_test.roll(1)
+    batch_test2[0] = 0
+    # TODO: not yet working
+
+    #coo_edges = []
+    coo_batch = []
+    coo_source = []
+    coo_sink = []
+
+    #stacked_starts = batch_starts.expand(B, edges.shape[-1]).T
+    stacked_starts = batch_starts.expand(edges.shape[-1], B).T
+    #stacked_ends = batch_ends.expand(B, edges.shape[-1]).T
+    stacked_ends = batch_ends.expand(edges.shape[-1], B).T
+    source_masks = (stacked_starts <= edges[0]) * (edges[0] < stacked_ends)
+    sink_masks = (stacked_starts < edges[1]) * (edges[1] <= stacked_ends)
+    # Mask is shape [B, edges]
+    masks = source_masks * sink_masks
+    # Stack edges to be [B, Edges], then select 
+    source_edges = edges[0].expand(B, -1).masked_select(masks)
+    sink_edges = edges[1].expand(B, -1).masked_select(masks)
+    # Now offset edges by batch
+    source_edges -= stacked_starts.masked_select(masks)
+    sink_edges -= stacked_starts.masked_select(masks)
+    edge_batch = masks.nonzero()[:,0]
+
+    coo_edges = torch.stack([edge_batch, source_edges, sink_edges])
+    adj = torch.sparse_coo_tensor(indices=coo_edges, values=weights, size=(B, 2, max_edges))
+    #import pdb; pdb.set_trace()
+
+    return nodes, adj, T
+
+
+
 
 
 # @torch.jit.script
@@ -188,6 +271,29 @@ def _pack_hidden(
 
     return nodes, dense_edges, dense_weights, T
 
+def _unpack_hidden_coo(
+    nodes: torch.Tensor,
+    adj: torch.Tensor,
+    T: torch.Tensor,
+    B: int,
+):
+    """Converts torch.sparse_coo adj to a edge list representation. Do NOT
+    invert the torch.sparse_coo, as it is already done here.
+
+    Flatten edges from [B, 2, max_edges] to [2, k * NE].  
+
+    Returns edges [B,2,NE] and weights [B,1,NE]"""
+    batch_offsets = T.cumsum(dim=0).roll(1)
+    batch_offsets[0] = 0
+    batch_offsets[1:] += 1
+
+    batch_idx = adj.indices()[0]
+    offset_edges = batch_offsets[batch_idx] + adj.indices()[1:]
+
+    flat_edges = offset_edges
+    flat_weights = adj.values()
+
+    return nodes, flat_edges, flat_weights, T
 
 # @torch.jit.script
 def _unpack_hidden(
@@ -239,6 +345,50 @@ def _unpack_hidden(
     return nodes, flat_edges, flat_weights, T, flat_B_idx
 
 
+def flatten_adj(adj, T, taus, B):
+    """Flatten a torch.coo_sparse [B, MAX_NODES, MAX_NODES] to [2, NE] and
+    adds offsets to avoid collisions.
+    This readies a sparse tensor for torch_geometric GNN
+    ingestion.
+
+    Returns edges, weights, and corresponding batch ids
+    """
+    # Get batch offsets is wrong (off by one)
+    #batch_starts = get_node_offsets(T + taus)
+    batch_starts, batch_ends = get_batch_offsets(T + taus)
+
+
+    batch_idx = adj._indices()[0]
+    edge_offsets = batch_starts[batch_idx]
+    flat_edges = adj._indices()[1:] + edge_offsets
+    flat_weights = adj._values()
+
+    #import pdb; pdb.set_trace()
+    if flat_edges.numel() > 0:
+        # Make sure idxs are removed alongside edges and weights
+        flat_edges, [flat_weights, batch_idx] = torch_geometric.utils.coalesce(
+            flat_edges, [flat_weights, batch_idx], reduce="mean"
+        )
+
+    return flat_edges, flat_weights, batch_idx
+    
+
+def unflatten_adj(edges, weights, batch_idx, T, taus, B, max_edges):
+    """Unflatten edges [2,NE], weights: [NE], and batch_idx [NE]
+    into a torch.coo_sparse adjacency matrix of [B, NE, NE]"""
+    #batch_starts = get_node_offsets(T + taus)
+    batch_starts, batch_ends = get_batch_offsets(T + taus)
+
+    edge_offsets = batch_starts[batch_idx]
+    adj_edge_idx = edges - edge_offsets
+    adj_idx = torch.stack([batch_idx, adj_edge_idx[0], adj_edge_idx[1]])
+    adj_val = weights
+    
+    return torch.sparse_coo_tensor(
+        indices=adj_idx, values=adj_val, size=(B, max_edges, max_edges)
+    )
+
+
 def flatten_edges_and_weights(edges, weights, T, taus, B):
     """Flatten edges from [B, 2, NE] to [2, k * NE], coalescing
     and removing invalid edges (-1). In other words, prep
@@ -284,7 +434,8 @@ def flatten_nodes(nodes: torch.Tensor, T: torch.Tensor, taus: torch.Tensor, B: i
     by the GNN.
 
     Returns flattened nodes and corresponding batch indices"""
-    batch_offsets = get_batch_offsets(T, taus)
+    batch_offsets, _ = get_batch_offsets(T + taus)
+    #batch_offsets, end_offset = get_edge_offsets(T + taus)
     B_idxs, tau_idxs = get_valid_node_idxs(T, taus, B)
     flat_nodes = nodes[B_idxs, tau_idxs]
     # Extracting belief requires batch-tau indices (newly inserted nodes)

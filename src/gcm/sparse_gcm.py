@@ -60,12 +60,13 @@ class SparseGCM(torch.nn.Module):
 
         assert x.dim() == 3
         B, _, feats = x.shape
-        edges = torch.zeros(2, 0, device=x.device, dtype=torch.long)
+        #edges = torch.zeros(2, 0, device=x.device, dtype=torch.long)
         nodes = torch.zeros(B, self.graph_size, feats, device=x.device)
-        weights = torch.zeros(0, device=x.device)
+        #weights = torch.zeros(0, device=x.device)
+        adj = torch.zeros((B, self.graph_size, self.graph_size), device=x.device, layout=torch.sparse_coo)
         T = torch.zeros(B, dtype=torch.long, device=x.device)
 
-        return nodes, edges, weights, T
+        return nodes, adj, T
 
     @typechecked
     def forward(
@@ -76,17 +77,15 @@ class SparseGCM(torch.nn.Module):
             None,
             Tuple[
                 TensorType["B", "N", "feats", float],  # noqa: F821 # Nodes
-                TensorType[2, "E", int],  # noqa: F821 # Edges
-                TensorType["E", float],  # noqa: F821 # Weights
-                TensorType["B", int],  # noqa: F821 #T
+                TensorType["B", "MAX_E", "MAX_E", float, torch.sparse_coo],   # noqa: F821 # Sparse adj
+                TensorType["B", int],  # noqa: F821 # T
             ],
         ],
     ) -> Tuple[  # type: ignore
         torch.Tensor,
         Tuple[
             TensorType["B", "N", "feats", float],  # noqa: F821 # Nodes
-            TensorType[2, "NE", int],  # noqa: F821 # Edges
-            TensorType["NE", float],  # noqa: F821 # Weights
+            TensorType["B", "MAX_E", "MAX_E", float, torch.sparse_coo],   # noqa: F821 # Sparse adj
             TensorType["B", int],  # noqa: F821 # T
         ],
     ]:
@@ -102,7 +101,7 @@ class SparseGCM(torch.nn.Module):
         if hidden is None:
             hidden = self.get_initial_hidden_state(x)
 
-        nodes, edges, weights, T = hidden
+        nodes, adj, T = hidden
 
         N = nodes.shape[1]
         B = x.shape[0]
@@ -113,7 +112,7 @@ class SparseGCM(torch.nn.Module):
 
         nodes = nodes.clone()
         # Add new nodes to the current graph
-        assert torch.all(edges[0] < edges[1]), "Edges violate causality"
+        assert torch.all(adj._indices()[2] < adj._indices()[1])
         # TODO: Wrap around instead of terminating
         if tau_idxs.max() >= N:
             raise Exception("Overflow")
@@ -126,9 +125,14 @@ class SparseGCM(torch.nn.Module):
         dirty_nodes = nodes.clone()
 
         if self.edge_selectors:
-            new_edges, new_weights = self.edge_selectors(dirty_nodes, T, taus, B)
-            edges = torch.cat((edges, new_edges), dim=-1)
-            weights = torch.cat((weights, new_weights), dim=-1)
+            new_adj = self.edge_selectors(dirty_nodes, T, taus, B)
+            new_idx = torch.cat([adj._indices(), new_adj._indices()], dim=-1) 
+            new_val = torch.cat([adj._values(), new_adj._values()], dim=-1)
+            adj = torch.sparse_coo_tensor(indices=new_idx, values=new_val, size=adj.shape)
+            # Flatten then unflatten coalesces using mean, so adj.max() == 1
+            #fe, fw, bi = util.flatten_adj(adj, T, taus, B) 
+            #adj = util.unflatten_adj(fe, fw, bi, T, taus, B, self.graph_size)
+
 
         # Thru network
         if self.preprocessor:
@@ -136,12 +140,17 @@ class SparseGCM(torch.nn.Module):
         if self.positional_encoder:
             dirty_nodes = self.positional_encoder(dirty_nodes)
         if self.aux_edge_selectors:
+            raise NotImplementedError()
             edges, weights, edge_B_idxs = self.edge_selectors(
                 dirty_nodes, edges, weights, T, taus, B
             )
 
         # Convert to GNN input format
         flat_nodes, output_node_idxs = util.flatten_nodes(dirty_nodes, T, taus, B)
+        edges, weights, edge_batch = util.flatten_adj(adj, T, taus, B)
+        # THIS IS THE ISSUE, we needed to flip
+        edges = torch.flip(edges, (0,))
+        #import pdb; pdb.set_trace()
         if edges.numel() > 0:
             edges, weights = torch_geometric.utils.coalesce(edges, weights)
         if self.max_hops is not None:
@@ -174,4 +183,4 @@ class SparseGCM(torch.nn.Module):
         mx_dense[dense_B_idxs, dense_tau_idxs] = mx
 
         T = T + taus
-        return mx_dense, (nodes, edges, weights, T)
+        return mx_dense, (nodes, adj, T)

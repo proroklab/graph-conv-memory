@@ -10,6 +10,154 @@ from gcm import util
 from gcm.sparse_gcm import SparseGCM
 
 
+class TestFlattenAdj(unittest.TestCase):
+    def setUp(self):
+        self.F = 4
+        self.B = 4
+        self.T = torch.tensor([1, 2, 0, 0])
+        self.taus = torch.zeros(4, dtype=torch.long)
+        self.graph_size = 5
+        self.max_edges = 6
+
+    def test_flatten_unflatten(self):
+        adj = torch.zeros(self.B, 2, self.max_edges)
+        adj[1, 0, 1] = 1.0
+        adj[1, 1, 2] = 2.0
+        sparse_adj = adj.to_sparse()
+        e, w, b = util.flatten_adj(sparse_adj, self.T, self.taus, self.B)
+        new_sparse_adj = util.unflatten_adj(e, w, b, self.T, self.taus, self.B, self.max_edges)
+
+        if not torch.all(
+            sparse_adj._indices() == new_sparse_adj._indices()
+        ):
+            self.fail(
+                f"\n{sparse_adj._indices()} != \n{new_sparse_adj._indices()}"
+            )
+        if not torch.all(
+            sparse_adj.coalesce().values() == new_sparse_adj.coalesce().values()
+        ):
+            self.fail(
+                f"{sparse_adj.coalesce().values()} != {sparse_adj.coalesce().values()}"
+            )
+
+    def test_flatten_unflatten2(self):
+        self.T = torch.tensor([1, 5, 2, 1])
+        self.taus = torch.zeros(4, dtype=torch.long)
+        adj = torch.zeros(self.B, 2, self.max_edges)
+        adj[1, 0, 1] = 1.0
+        adj[1, 1, 2] = 2.0
+        adj[1, 1, 3] = 3.0
+        adj[2, 0, 1] = 4.0
+        sparse_adj = adj.to_sparse()
+        e, w, b = util.flatten_adj(sparse_adj, self.T, self.taus, self.B)
+        new_sparse_adj = util.unflatten_adj(e, w, b, self.T, self.taus, self.B, self.max_edges)
+
+        if not torch.all(
+            sparse_adj._indices() == new_sparse_adj._indices()
+        ):
+            self.fail(
+                f"\n{sparse_adj._indices()} != \n{new_sparse_adj._indices()}"
+            )
+        if not torch.all(
+            sparse_adj.coalesce().values() == new_sparse_adj.coalesce().values()
+        ):
+            self.fail(
+                f"{sparse_adj.coalesce().values()} != {sparse_adj.coalesce().values()}"
+            )
+
+
+class TestCOOPack(unittest.TestCase):
+    def setUp(self):
+        self.F = 4
+        self.B = 4
+        self.T = torch.tensor([1, 2, 0, 0])
+        self.graph_size = 5
+        self.max_edges = 6
+
+    def test_unpack_pack(self):
+        nodes = torch.zeros(self.B, self.graph_size, self.F)
+
+        adj = torch.zeros(self.B, 2, self.max_edges)
+        adj[0, 0, 1] = 1.0
+        adj[1, 0, 1] = 2.0
+        adj[1, 1, 2] = 3.0
+
+        sparse_adj = adj.to_sparse()
+        initial_packed_hidden = (
+            nodes.clone(),
+            sparse_adj.clone(),
+            self.T.clone(),
+        )
+
+        packed_hidden = (nodes, sparse_adj, self.T)
+        unpacked_hidden = util.unpack_hidden(packed_hidden, self.B, mode="coo")
+        repacked_hidden = util.pack_hidden(unpacked_hidden, self.B, self.max_edges, mode="coo")
+
+        for i in range(len(initial_packed_hidden)):
+            if initial_packed_hidden[i].layout == torch.sparse_coo:
+                # Sparse adj cannot do == 
+                if not torch.all(initial_packed_hidden[i].coalesce().indices() == repacked_hidden[i].coalesce().indices()):
+                    self.fail(
+                        f"packed hidden tensor {i} != repacked hidden tensor"
+                        "{initial_packed_hidden[i]) != {repacked_hidden[i]}"
+                    )
+                if not torch.all(initial_packed_hidden[i].coalesce().values() == repacked_hidden[i].coalesce().values()):
+                    self.fail(
+                        f"packed hidden tensor {i} != repacked hidden tensor"
+                        "{initial_packed_hidden[i]) != {repacked_hidden[i]}"
+                    )
+
+            else:
+                if not (initial_packed_hidden[i] == repacked_hidden[i]).all():
+                    self.fail(
+                        f"packed hidden tensor {i} != repacked hidden tensor"
+                        "{initial_packed_hidden[i]) != {repacked_hidden[i]}"
+                    )
+
+    def test_unpack_pack2(self):
+        self.T = torch.tensor([3, 1, 1, 2])
+        nodes = torch.zeros(self.B, self.graph_size, self.F)
+
+        adj = torch.zeros(self.B, 2, self.max_edges)
+        adj[0, 0, 1] = 1.0
+        adj[0, 1, 2] = 2.0
+        adj[3, 0, 1] = 3.0
+
+        sparse_adj = adj.to_sparse()
+        initial_packed_hidden = (
+            nodes.clone(),
+            sparse_adj.clone(),
+            self.T.clone(),
+        )
+
+        packed_hidden = (nodes, sparse_adj, self.T)
+        unpacked_hidden = util.unpack_hidden(packed_hidden, self.B, mode="coo")
+        repacked_hidden = util.pack_hidden(unpacked_hidden, self.B, self.max_edges, mode="coo")
+
+        for i in range(len(initial_packed_hidden)):
+            if initial_packed_hidden[i].layout == torch.sparse_coo:
+                # Sparse adj cannot do == 
+                if not torch.all(initial_packed_hidden[i].coalesce().indices() == repacked_hidden[i].coalesce().indices()):
+                    import pdb; pdb.set_trace()
+                    self.fail(
+                        f"packed hidden tensor {i} != repacked hidden tensor"
+                        f"{initial_packed_hidden[i]} != {repacked_hidden[i]}"
+                    )
+                if not torch.all(initial_packed_hidden[i].coalesce().values() == repacked_hidden[i].coalesce().values()):
+                    self.fail(
+                        f"packed hidden tensor {i} != repacked hidden tensor"
+                        f"{initial_packed_hidden[i]} != {repacked_hidden[i]}"
+                    )
+
+            else:
+                if not (initial_packed_hidden[i] == repacked_hidden[i]).all():
+                    self.fail(
+                        f"packed hidden tensor {i} != repacked hidden tensor"
+                        "{initial_packed_hidden[i]) != {repacked_hidden[i]}"
+                    )
+
+
+
 class TestPack(unittest.TestCase):
     def setUp(self):
         self.F = 4
@@ -333,14 +481,52 @@ class TestDenseVsSparse(unittest.TestCase):
         if dense_outs.numel() != sparse_outs.numel():
             self.fail(f"sizes {dense_outs.numel()} != {sparse_outs.numel()}")
 
-        # Dense edges
-        # [1,0], [2,1], [3,2] for each batch
-        # Sparse edges
-        # [0,1], [1,2], [2,3]
-
         # Check hiddens
         if not torch.all(dense_hidden[0] == sparse_hidden[0]):
             self.fail(f"{dense_hidden[0]} != {sparse_hidden[0]}")
+
+        # EDGES FOR DENSE AND SPARSE ARE THE SAME
+        # YET OUTS ARE NOT, WHY IS THIS?
+        if not torch.all(dense_hidden[1].nonzero().T == sparse_hidden[1].coalesce().indices()):
+            self.fail(f"dense and sparse edges inequal: \n{dense_hidden[1].nonzero().T} != \n{sparse_hidden[1]._indices()}")
+
+        if not torch.all(dense_outs == sparse_outs):
+            self.fail(f"{dense_outs} != {sparse_outs}")
+
+
+    def test_temporal_edges_many_iter(self):
+        self.dense_gcm = DenseGCM(
+            self.dense_g, edge_selectors=TemporalBackedge([1, 2]), graph_size=8
+        )
+        self.sparse_gcm = SparseGCM(
+            self.sparse_g, edge_selectors=TemporalEdge([1, 2]), graph_size=8
+        )
+        F = self.F
+        B = 3
+        ts = 8
+        self.obs = torch.arange(B * ts * F, dtype=torch.float32).reshape(B, ts, F)
+
+        dense_outs = []
+
+        dense_hidden = None
+        for i in range(ts):
+            dense_out, dense_hidden = self.dense_gcm(self.obs[:, i], dense_hidden)
+            dense_outs.append(dense_out)
+        dense_outs = torch.stack(dense_outs, dim=1)
+
+        sparse_hidden = None
+        taus = torch.ones(B, dtype=torch.long)
+        sparse_outs = []
+        for i in range(ts):
+            sparse_out, sparse_hidden = self.sparse_gcm(self.obs[:,i].unsqueeze(1), taus, sparse_hidden)
+            sparse_outs.append(sparse_out)
+        sparse_outs = torch.cat(sparse_outs, dim=1)
+
+        if dense_outs.numel() != sparse_outs.numel():
+            self.fail(f"sizes {dense_outs.numel()} != {sparse_outs.numel()}")
+
+        if not torch.all(dense_hidden[1].nonzero().T == sparse_hidden[1]._indices()):
+            self.fail("sparse and dense edges inequal: \n{dense_hidden[1].nonzero()} != \n{sparse_hidden[1]._indices()}")
 
         if not torch.all(dense_outs == sparse_outs):
             self.fail(f"{dense_outs} != {sparse_outs}")
@@ -405,6 +591,10 @@ class TestDenseVsSparse(unittest.TestCase):
             if not torch.all(dense_outs == sparse_outs):
                 self.fail(f"{dense_outs} != {sparse_outs}")
 
+            # TODO we are missing 8 edges:
+            # sparse_hidden[2].shape == 39, sparse_step_hidden[2].shape == 1
+            # this is exactly ts
+            import pdb; pdb.set_trace()
             if not torch.all(dense_outs == sparse_step_outs):
                 self.fail(f"{dense_outs} != {sparse_step_outs}")
             sparse_outs.mean().backward()
