@@ -112,7 +112,7 @@ class SparseGCM(torch.nn.Module):
 
         nodes = nodes.clone()
         # Add new nodes to the current graph
-        assert torch.all(adj._indices()[2] < adj._indices()[1])
+        #assert torch.all(adj._indices()[1] < adj._indices()[2])
         # TODO: Wrap around instead of terminating
         if tau_idxs.max() >= N:
             raise Exception("Overflow")
@@ -148,9 +148,10 @@ class SparseGCM(torch.nn.Module):
         # Convert to GNN input format
         flat_nodes, output_node_idxs = util.flatten_nodes(dirty_nodes, T, taus, B)
         edges, weights, edge_batch = util.flatten_adj(adj, T, taus, B)
-        # THIS IS THE ISSUE, we needed to flip
+        # Our adj matrix is sink -> source, but torch_geometric
+        # expects edgelist as source -> sink, so flip
         edges = torch.flip(edges, (0,))
-        #import pdb; pdb.set_trace()
+        assert torch.all(edges[0] < edges[1]), "Causality violated"
         if edges.numel() > 0:
             edges, weights = torch_geometric.utils.coalesce(edges, weights)
         if self.max_hops is not None:
@@ -166,8 +167,6 @@ class SparseGCM(torch.nn.Module):
                 edges,
                 num_nodes=output_node_idxs.shape[0],
             )
-            # import ray
-            # ray.util.pdb.set_trace()
         node_feats = self.gnn(flat_nodes, edges, weights)
         # Extract the hidden repr at the new nodes
         # Each mx is variable in temporal dim, so return 2D tensor of [B*tau, feat]

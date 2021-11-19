@@ -59,25 +59,3 @@ class TemporalEdge(torch.nn.Module):
         weights = weights[mask]
         adj = torch.sparse_coo_tensor(indices=filtered_edge_idx, values=weights, size=(B, int(1e5), int(1e5)), device=nodes.device)
         return adj
-
-        """
-        edge_starts = edge_starts.flatten()
-        edge_ends = edge_ends.flatten()
-        # Remove invalid edges (<0) before we add offsets
-        mask = edge_starts >= 0
-        # Offset edges
-        edge_starts = edge_starts + edge_base_offsets.repeat_interleave(len(self.hops))
-        edge_ends = edge_ends + edge_base_offsets.repeat_interleave(len(self.hops))
-
-
-        new_edges = torch.stack((edge_starts, edge_ends))
-        new_weights = torch.ones_like(new_edges[0], dtype=torch.float)
-
-        # Filter invalid edges
-        new_edges = new_edges[:, mask]
-        new_weights = new_weights[mask]
-
-        assert torch.all(new_edges[0] < new_edges[1]), "Tried to add invalid edge"
-        """
-
-        return new_edges, new_weights
