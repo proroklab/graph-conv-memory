@@ -66,97 +66,6 @@ class TestFlattenAdj(unittest.TestCase):
             )
 
 
-class TestCOOPack(unittest.TestCase):
-    def setUp(self):
-        self.F = 4
-        self.B = 4
-        self.T = torch.tensor([1, 2, 0, 0])
-        self.graph_size = 5
-        self.max_edges = 6
-
-    def test_unpack_pack(self):
-        nodes = torch.zeros(self.B, self.graph_size, self.F)
-
-        adj = torch.zeros(self.B, 2, self.max_edges)
-        adj[0, 0, 1] = 1.0
-        adj[1, 0, 1] = 2.0
-        adj[1, 1, 2] = 3.0
-
-        sparse_adj = adj.to_sparse()
-        initial_packed_hidden = (
-            nodes.clone(),
-            sparse_adj.clone(),
-            self.T.clone(),
-        )
-
-        packed_hidden = (nodes, sparse_adj, self.T)
-        unpacked_hidden = util.unpack_hidden(packed_hidden, self.B, mode="coo")
-        repacked_hidden = util.pack_hidden(unpacked_hidden, self.B, self.max_edges, mode="coo")
-
-        for i in range(len(initial_packed_hidden)):
-            if initial_packed_hidden[i].layout == torch.sparse_coo:
-                # Sparse adj cannot do == 
-                if not torch.all(initial_packed_hidden[i].coalesce().indices() == repacked_hidden[i].coalesce().indices()):
-                    self.fail(
-                        f"packed hidden tensor {i} != repacked hidden tensor"
-                        "{initial_packed_hidden[i]) != {repacked_hidden[i]}"
-                    )
-                if not torch.all(initial_packed_hidden[i].coalesce().values() == repacked_hidden[i].coalesce().values()):
-                    self.fail(
-                        f"packed hidden tensor {i} != repacked hidden tensor"
-                        "{initial_packed_hidden[i]) != {repacked_hidden[i]}"
-                    )
-
-            else:
-                if not (initial_packed_hidden[i] == repacked_hidden[i]).all():
-                    self.fail(
-                        f"packed hidden tensor {i} != repacked hidden tensor"
-                        "{initial_packed_hidden[i]) != {repacked_hidden[i]}"
-                    )
-
-    def test_unpack_pack2(self):
-        self.T = torch.tensor([3, 1, 1, 2])
-        nodes = torch.zeros(self.B, self.graph_size, self.F)
-
-        adj = torch.zeros(self.B, 2, self.max_edges)
-        adj[0, 0, 1] = 1.0
-        adj[0, 1, 2] = 2.0
-        adj[3, 0, 1] = 3.0
-
-        sparse_adj = adj.to_sparse()
-        initial_packed_hidden = (
-            nodes.clone(),
-            sparse_adj.clone(),
-            self.T.clone(),
-        )
-
-        packed_hidden = (nodes, sparse_adj, self.T)
-        unpacked_hidden = util.unpack_hidden(packed_hidden, self.B, mode="coo")
-        repacked_hidden = util.pack_hidden(unpacked_hidden, self.B, self.max_edges, mode="coo")
-
-        for i in range(len(initial_packed_hidden)):
-            if initial_packed_hidden[i].layout == torch.sparse_coo:
-                # Sparse adj cannot do == 
-                if not torch.all(initial_packed_hidden[i].coalesce().indices() == repacked_hidden[i].coalesce().indices()):
-                    import pdb; pdb.set_trace()
-                    self.fail(
-                        f"packed hidden tensor {i} != repacked hidden tensor"
-                        f"{initial_packed_hidden[i]} != {repacked_hidden[i]}"
-                    )
-                if not torch.all(initial_packed_hidden[i].coalesce().values() == repacked_hidden[i].coalesce().values()):
-                    self.fail(
-                        f"packed hidden tensor {i} != repacked hidden tensor"
-                        f"{initial_packed_hidden[i]} != {repacked_hidden[i]}"
-                    )
-
-            else:
-                if not (initial_packed_hidden[i] == repacked_hidden[i]).all():
-                    self.fail(
-                        f"packed hidden tensor {i} != repacked hidden tensor"
-                        "{initial_packed_hidden[i]) != {repacked_hidden[i]}"
-                    )
-
-
 
 class TestPack(unittest.TestCase):
     def setUp(self):
@@ -189,6 +98,7 @@ class TestPack(unittest.TestCase):
         repacked_hidden = util.pack_hidden(unpacked_hidden, self.B, self.max_edges)
 
         for i in range(len(initial_packed_hidden)):
+            import pdb; pdb.set_trace()
             if not (initial_packed_hidden[i] == repacked_hidden[i]).all():
                 self.fail(
                     f"packed hidden tensor {i} != repacked hidden tensor"

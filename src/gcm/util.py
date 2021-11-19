@@ -162,6 +162,59 @@ def unflatten_adj(edges, weights, batch_idx, T, taus, B, max_edges):
     )
 
 
+
+def pack_hidden(hidden, B, max_edges: int, edge_fill: int=-1, weight_fill: float=1.0):
+    return _pack_hidden(*hidden, B, max_edges, edge_fill, weight_fill)
+
+def _pack_hidden(
+	nodes: torch.Tensor,
+	adj: torch.Tensor,
+	T: torch.Tensor,
+	B: int,
+	max_edges: int,
+	edge_fill: int = -1,
+	weight_fill: float = 1.0,
+):
+    """Converts a torch.coo_sparse adj to a ray dense edgelist."""
+    batch_idx, source_idx, sink_idx = adj._indices().unbind()
+    dense_edges = torch.empty((B, 2, max_edges), device=adj.device, dtype=torch.long).fill_(edge_fill)
+    dense_weights = torch.empty((B, 1, max_edges), device=adj.device, dtype=torch.float).fill_(weight_fill)
+
+    # TODO fix this, this is stupid
+    for b in range(B):
+        batch_edges = batch_idx == b
+        edges_in_batch = batch_edges.sum()
+        dense_edges[b, 0, :edges_in_batch] = source_idx[batch_edges]
+        dense_edges[b, 1, :edges_in_batch] = sink_idx[batch_edges]
+        dense_weights[b, 0, :edges_in_batch] = adj._values()[batch_edges]
+
+    return nodes, dense_edges, dense_weights, T
+
+def unpack_hidden(hidden, B):
+    return _unpack_hidden(*hidden, B) 
+
+def _unpack_hidden(
+    nodes: torch.Tensor,
+    edges: torch.Tensor,
+    weights: torch.Tensor,
+    T: torch.Tensor,
+    B: torch.Tensor
+):
+    """Convert a ray dense edgelist into a torch.coo_sparse tensor"""
+    batch_idx, source_idx = (edges[:,0] >= 0).nonzero().T.unbind()
+    sink_idx = edges[batch_idx, 1, source_idx]
+    adj_idx = torch.stack([batch_idx, source_idx, sink_idx])
+
+    weights_filtered = weights[batch_idx, 0, sink_idx]
+
+    adj = torch.sparse_coo_tensor(
+        indices=adj_idx, values=weights_filtered, size=(B, nodes.shape[0], nodes.shape[0])
+    )
+
+    return nodes, adj, T
+
+
+
 def flatten_edges_and_weights(edges, weights, T, taus, B):
     """Flatten edges from [B, 2, NE] to [2, k * NE], coalescing
     and removing invalid edges (-1). In other words, prep
