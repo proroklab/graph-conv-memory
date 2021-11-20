@@ -180,13 +180,13 @@ def _pack_hidden(
     dense_edges = torch.empty((B, 2, max_edges), device=adj.device, dtype=torch.long).fill_(edge_fill)
     dense_weights = torch.empty((B, 1, max_edges), device=adj.device, dtype=torch.float).fill_(weight_fill)
 
-    # TODO fix this, this is stupid
-    for b in range(B):
-        batch_edges = batch_idx == b
-        edges_in_batch = batch_edges.sum()
-        dense_edges[b, 0, :edges_in_batch] = source_idx[batch_edges]
-        dense_edges[b, 1, :edges_in_batch] = sink_idx[batch_edges]
-        dense_weights[b, 0, :edges_in_batch] = adj._values()[batch_edges]
+    edge_idx = torch.arange(sink_idx.shape[-1], dtype=torch.long, device=adj.device)
+    edge_idx_offset = edge_idx - batch_idx
+
+    dense_edges[batch_idx, 0, edge_idx_offset] = source_idx
+    dense_edges[batch_idx, 1, edge_idx_offset] = sink_idx
+    # TODO weights are wrong from _unpack_hidden
+    dense_weights[batch_idx, 0, edge_idx_offset] = adj._values()
 
     return nodes, dense_edges, dense_weights, T
 
