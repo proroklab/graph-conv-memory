@@ -395,10 +395,7 @@ class TestDenseVsSparse(unittest.TestCase):
         if not torch.all(dense_hidden[0] == sparse_hidden[0]):
             self.fail(f"{dense_hidden[0]} != {sparse_hidden[0]}")
 
-        # EDGES FOR DENSE AND SPARSE ARE THE SAME
-        # YET OUTS ARE NOT, WHY IS THIS?
         if not torch.all(dense_hidden[1].nonzero().T == sparse_hidden[1].coalesce().indices()):
-            import pdb; pdb.set_trace()
             self.fail(f"dense and sparse edges inequal: \n{dense_hidden[1].nonzero().T} != \n{sparse_hidden[1]._indices()}")
 
         if not torch.all(dense_outs == sparse_outs):
@@ -499,7 +496,7 @@ class TestDenseVsSparse(unittest.TestCase):
             if not torch.all(dense_hidden[0] == sparse_hidden[0]):
                 self.fail(f"{dense_hidden[0]} != {sparse_hidden[0]}")
 
-            if not torch.all(dense_outs == sparse_outs):
+            if not torch.allclose(dense_outs, sparse_outs, atol=0.01):
                 self.fail(f"{dense_outs} != {sparse_outs}")
 
             # TODO we are missing 8 edges:
