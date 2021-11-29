@@ -85,6 +85,7 @@ class TestPack(unittest.TestCase):
 
         dense_weight = torch.empty(self.B, 1, self.max_edges).fill_(1.0)
         dense_weight[0, 0, 0] = 0.5
+        dense_weight[1, 0, 0] = 0.33
         dense_weight[1, 0, 1] = 0.25
         initial_packed_hidden = (
             nodes.clone(),
@@ -98,7 +99,6 @@ class TestPack(unittest.TestCase):
         repacked_hidden = util.pack_hidden(unpacked_hidden, self.B, self.max_edges)
 
         for i in range(len(initial_packed_hidden)):
-            import pdb; pdb.set_trace()
             if not (initial_packed_hidden[i] == repacked_hidden[i]).all():
                 self.fail(
                     f"packed hidden tensor {i} != repacked hidden tensor"
@@ -219,7 +219,7 @@ class TestPack(unittest.TestCase):
             if not (initial_packed_hidden[i] == repacked_hidden[i]).all():
                 self.fail(
                     f"packed hidden tensor {i} != repacked hidden tensor"
-                    "{initial_packed_hidden[i]) != {repacked_hidden[i]}"
+                    f"\n{initial_packed_hidden[i]} != \n\n{repacked_hidden[i]}"
                 )
 
     def test_unpack_pack_many(self):

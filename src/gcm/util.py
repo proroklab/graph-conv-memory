@@ -180,13 +180,12 @@ def _pack_hidden(
     dense_edges = torch.empty((B, 2, max_edges), device=adj.device, dtype=torch.long).fill_(edge_fill)
     dense_weights = torch.empty((B, 1, max_edges), device=adj.device, dtype=torch.float).fill_(weight_fill)
 
-    edge_idx = torch.arange(sink_idx.shape[-1], dtype=torch.long, device=adj.device)
-    edge_idx_offset = edge_idx - batch_idx
-
-    dense_edges[batch_idx, 0, edge_idx_offset] = source_idx
-    dense_edges[batch_idx, 1, edge_idx_offset] = sink_idx
-    # TODO weights are wrong from _unpack_hidden
-    dense_weights[batch_idx, 0, edge_idx_offset] = adj._values()
+    # TODO can we vectorize this without a BxNE matrix?
+    for b in range(B):
+        sparse_b_idx = torch.nonzero(batch_idx == b).reshape(-1)
+        dense_b_idx = torch.arange(sparse_b_idx.shape[0])
+        dense_edges[b, :, dense_b_idx] = adj._indices()[1:, sparse_b_idx]
+        dense_weights[b, 0, dense_b_idx] = adj._values()[sparse_b_idx]
 
     return nodes, dense_edges, dense_weights, T
 
@@ -201,14 +200,20 @@ def _unpack_hidden(
     B: torch.Tensor
 ):
     """Convert a ray dense edgelist into a torch.coo_sparse tensor"""
-    batch_idx, source_idx = (edges[:,0] >= 0).nonzero().T.unbind()
-    sink_idx = edges[batch_idx, 1, source_idx]
-    adj_idx = torch.stack([batch_idx, source_idx, sink_idx])
+    # Get indices of valid edge pairs
+    batch_idx, edge_idx = (edges[:,0] >= 0).nonzero().T.unbind()
+    # Get values of valid edge pairs
+    sources = edges[batch_idx, 0, edge_idx]
+    sinks = edges[batch_idx, 1, edge_idx]
 
-    weights_filtered = weights[batch_idx, 0, sink_idx]
+    adj_idx = torch.stack([batch_idx, sources, sinks])
+    weights_filtered = weights[batch_idx, 0, edge_idx]
+    #sink_idx = edges[batch_idx, 1, source_idx]
+    #adj_idx = torch.stack([batch_idx, source_idx, sink_idx])
+
 
     adj = torch.sparse_coo_tensor(
-        indices=adj_idx, values=weights_filtered, size=(B, nodes.shape[0], nodes.shape[0])
+        indices=adj_idx, values=weights_filtered, size=(B, nodes.shape[1], nodes.shape[1])
     )
 
     return nodes, adj, T
