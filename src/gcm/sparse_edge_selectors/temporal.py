@@ -30,8 +30,11 @@ class TemporalEdge(torch.nn.Module):
 
         # Build a base of edges (x - hop for all hops)
         # then we add the batch offsets to them
+        # Add the -1 filler so we can stack the batches later
+        edge_base = torch.empty((B, taus.max()), device=nodes.device, dtype=torch.long).fill_(-1)
         for b in range(B):
-            edge_base.append(torch.arange(T[b], T[b] + taus[b], device=nodes.device))
+            edge_base[b, :taus[b]] = torch.arange(T[b], T[b] + taus[b], device=nodes.device)
+
 
         # No edges to add
         if len(edge_base) < 1:
@@ -41,8 +44,7 @@ class TemporalEdge(torch.nn.Module):
             empty_weights = torch.empty((0), device=nodes.device, dtype=torch.float)
             return empty_edges, empty_weights
 
-        # [B, num_edges]
-        edge_base = torch.stack(edge_base)
+        
         sink_edges  = edge_base.unsqueeze(-1).repeat(1, 1, len(self.hops))
         source_edges = sink_edges - self.hops.to(nodes.device)
         batch_idx = torch.arange(B, device=nodes.device).unsqueeze(-1).unsqueeze(-1).expand(source_edges.shape)
