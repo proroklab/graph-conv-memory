@@ -50,7 +50,7 @@ class LearnedEdge(torch.nn.Module):
         T: TensorType["B", int],  # type: ignore # noqa: F821
         taus: TensorType["B", int],  # type: ignore # noqa: F821
         B: int,
-        ) -> TensorType["B", "MAX_EDGES", "MAX_EDGES", float, torch.sparse_coo]:  # type: ignore # noqa: F821
+        ) -> TensorType["B", "N", "N", float, torch.sparse_coo]:  # type: ignore # noqa: F821
 
         # No edges to create
         if (T + taus).max() <= 1:
@@ -86,19 +86,21 @@ class LearnedEdge(torch.nn.Module):
         start_idx = stop_idx.roll(1)
         start_idx[0] = 0
 
-        # Compute a single, large sparse adj matrix of shape [B, max_nodes, max_nodes]
-        import pdb; pdb.set_trace()
 
-
-
-
-
-
-
-        source_edges = []
-        sink_edges = []
-        weights = []
+        adj_idxs = []
+        adj_vals = []
         for b in range(B):
+            # Construct all valid edge combinations
+            edge_idx = torch.tril_indices(
+                T[b] + taus[b], T[b] + taus[b], offset=-1
+            )
+            # Don't evaluate incoming edges for the T entries, as we are only
+            # interested in incoming data for T + tau
+            sink_idx, source_idx = edge_idx[:, edge_idx[0] > T[b]] 
+
+            sink_nodes = nodes[b, sink_idx]
+            source_nodes = nodes[b, source_idx]
+            """
             sink_idx_idx = torch.where(sink_B_idxs == b)
             sink_idx = sink_B_idxs[sink_idx_idx], sink_tau_idxs[sink_idx_idx]
             sink_nodes = nodes[sink_idx]
@@ -111,22 +113,44 @@ class LearnedEdge(torch.nn.Module):
             left_idx = sink_idx_idx[0].repeat(T[b] + taus[b])
             right_nodes = source_nodes.repeat_interleave(taus[b], 0)
             right_idx = source_idx_idx[0].repeat_interleave(T[b] + taus[b])
+            """
 
             #net_in[start_idx[b]:stop_idx[b]] = torch.cat((left_nodes, right_nodes), dim=-1)
-            network_input = torch.cat((left_nodes, right_nodes), dim=-1)
+            # Thru network for logits
+            network_input = torch.cat((sink_nodes, source_nodes), dim=-1)
             logits = self.edge_network(network_input).squeeze()
 
+            # Logits to probabilities via gumbel softmax
             gs_in = logits.repeat(self.num_edge_samples, 1, 1)
-            soft = torch.nn.functional.gumbel_softmax(gs_in, hard=True, tau=0.01)
-            edge_grad_path = self.ste(soft.sum(dim=0))
-            edge_idx = edge_grad_path.nonzero()[:,1]
+            soft = torch.nn.functional.gumbel_softmax(gs_in, hard=True)
+            # Store gumbel softmax output so we can propagate their gradients
+            # thru weights/values in the adj
+            sampled_edge_grad_path = self.ste(soft.sum(dim=0)).squeeze(0)
+            sampled_edge_idx = sampled_edge_grad_path.nonzero().squeeze(1)
 
-            sink_edges.append(left_idx[edge_idx])
-            source_edges.append(right_idx[edge_idx])
-            import pdb; pdb.set_trace()
-            weights.append(edge_grad_path[edge_idx])
+            # Add [B, source, sink] edge indices
+            adj_idx = torch.stack((
+                b * torch.ones(sampled_edge_idx.shape[-1]),
+                sink_idx[sampled_edge_idx],
+                source_idx[sampled_edge_idx],
+            ))
+            adj_idxs.append(adj_idx)
 
-            # TODO gumbel softmax
+            # Gradients are stored here
+            adj_vals.append(sampled_edge_grad_path[sampled_edge_idx])
+
+
+        indices = torch.cat(adj_idxs, dim=-1)
+        values = torch.cat(adj_vals)
+
+        adj = torch.sparse_coo_tensor(
+            indices=indices,
+            values=values,
+            size=(B, nodes.shape[1], nodes.shape[1])
+        )
+        return adj
+
+
 
         #logits = self.edge_network(net_in).squeeze() 
         # Logits are indexed as [B, T*tau
