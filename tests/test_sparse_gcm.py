@@ -6,6 +6,8 @@ from collections import OrderedDict
 from gcm.gcm import DenseGCM
 from gcm.edge_selectors.temporal import TemporalBackedge
 from gcm.sparse_edge_selectors.temporal import TemporalEdge
+from gcm.edge_selectors.learned import LearnedEdge as DLearnedEdge
+from gcm.sparse_edge_selectors.learned import LearnedEdge as SLearnedEdge
 from gcm import util
 from gcm.sparse_gcm import SparseGCM
 
@@ -499,9 +501,6 @@ class TestDenseVsSparse(unittest.TestCase):
             if not torch.allclose(dense_outs, sparse_outs, atol=0.01):
                 self.fail(f"{dense_outs} != {sparse_outs}")
 
-            # TODO we are missing 8 edges:
-            # sparse_hidden[2].shape == 39, sparse_step_hidden[2].shape == 1
-            # this is exactly ts
             if not torch.all(dense_outs == sparse_step_outs):
                 self.fail(f"{dense_outs} != {sparse_step_outs}")
             sparse_outs.mean().backward()
@@ -514,6 +513,43 @@ class TestDenseVsSparse(unittest.TestCase):
                     self.fail(
                         f"Parameters diverged: {v}, {self.dense_g.state_dict()[k]}"
                     )
+    def test_learned_edges(self):
+        self.dense_gcm = DenseGCM(
+            self.dense_g, edge_selectors=DLearnedEdge(self.F), graph_size=8
+        )
+        self.sparse_gcm = SparseGCM(
+            self.sparse_g, edge_selectors=SLearnedEdge(self.F), graph_size=8
+        )
+        F = self.F
+        B = 3
+        ts = 8
+        self.obs = torch.ones((B, ts, F)) * torch.arange(8)[None, :, None]
+        self.obs[1] *= -1
+        self.obs[2] *= 10
+
+        dense_outs = []
+
+        dense_hidden = None
+        for i in range(ts):
+            dense_out, dense_hidden = self.dense_gcm(self.obs[:, i], dense_hidden)
+            dense_outs.append(dense_out)
+        dense_outs = torch.stack(dense_outs, dim=1)
+
+        taus = torch.ones(B, dtype=torch.long) * ts
+        sparse_outs, sparse_hidden = self.sparse_gcm(self.obs, taus, None)
+
+        if dense_outs.numel() != sparse_outs.numel():
+            self.fail(f"sizes {dense_outs.numel()} != {sparse_outs.numel()}")
+
+        # Check hiddens
+        if not torch.all(dense_hidden[0] == sparse_hidden[0]):
+            self.fail(f"{dense_hidden[0]} != {sparse_hidden[0]}")
+
+        if not torch.all(dense_hidden[1].nonzero().T == sparse_hidden[1].coalesce().indices()):
+            self.fail(f"dense and sparse edges inequal: \n{dense_hidden[1].nonzero().T} != \n{sparse_hidden[1]._indices()}")
+
+        if not torch.all(dense_outs == sparse_outs):
+            self.fail(f"{dense_outs} != {sparse_outs}")
 
 
 if __name__ == "__main__":
