@@ -77,6 +77,29 @@ class TestPack(unittest.TestCase):
         self.graph_size = 5
         self.max_edges = 10
 
+    def test_unpack_pack_empty(self):
+        self.T = torch.tensor([0, 0, 0]) 
+        nodes = torch.zeros(self.B, self.graph_size, self.F)
+        dense_edge = torch.empty(self.B, 2, self.max_edges, dtype=torch.long).fill_(-1)
+        dense_weight = torch.empty(self.B, 1, self.max_edges).fill_(1.0)
+
+        initial_packed_hidden = (
+            nodes.clone(),
+            dense_edge.clone(),
+            dense_weight.clone(),
+            self.T.clone(),
+        )
+
+        packed_hidden = (nodes, dense_edge, dense_weight, self.T)
+        unpacked_hidden = util.unpack_hidden(packed_hidden, self.B)
+        repacked_hidden = util.pack_hidden(unpacked_hidden, self.B, self.max_edges)
+        for i in range(len(initial_packed_hidden)):
+            if not (initial_packed_hidden[i] == repacked_hidden[i]).all():
+                self.fail(
+                    f"packed hidden tensor {i} != repacked hidden tensor"
+                    "{initial_packed_hidden[i]) != {repacked_hidden[i]}"
+                )
+
     def test_unpack_pack(self):
         nodes = torch.zeros(self.B, self.graph_size, self.F)
 
