@@ -61,34 +61,64 @@ class LearnedEdge(torch.nn.Module):
 
         # TODO: use window
 
-        # Get new nodes
-        sink_B_idxs, sink_tau_idxs = util.get_new_node_idxs(T, taus, B)
-        # Get past nodes
-        source_B_idxs, source_tau_idxs = util.get_valid_node_idxs(T, taus, B)
+        # Do for all batches at once
+        #
+        # Construct indices denoting all edges we want to sample from
+        # Note that we only want to sample incoming edges from nodes T to T + tau
+        edge_idx = []
+        for b in range(B):
+            edge = torch.tril_indices(
+                T[b] + taus[b], T[b] + taus[b], offset=-1, dtype=torch.long,
+            )
+            batch = b * torch.ones(edge[-1].shape[-1], device=nodes.device, dtype=torch.long)
+            edge_idx.append(torch.cat((batch.unsqueeze(0), edge), dim=0))
 
-        # Each batch should produce |v1| * |v2| total edges
-        # where v1 are sink nodes and v2 are source nodes for batch b
-        # where |v1| == taus[b] + T[b]
-        # and |v2| == taus[b]
+        # Shape [3, N] denoting batch, sink, source
+        # these indices denote nodes pairs being fed to network
+        edge_idx = torch.cat(edge_idx, dim=-1)
+        batch_idx, sink_idx, source_idx = edge_idx.unbind()
+        # Feed node pairs to network
+        sink_nodes = nodes[batch_idx, sink_idx]
+        source_nodes = nodes[batch_idx, source_idx]
+        network_input = torch.cat((sink_nodes, source_nodes), dim=-1)
+        # Logits is of shape [N]
+        logits = self.edge_network(network_input).squeeze()
+        # TODO rather than sparse to dense conversion, implement
+        # a sparse gumbel softmax
+        gs_input = torch.empty(
+            (batch_idx.max() + 1, sink_idx.max() + 1, source_idx.max() + 1),
+            device=nodes.device, dtype=torch.float
+        ).fill_(torch.finfo(torch.float).min)
+        gs_input[batch_idx, sink_idx, source_idx] = logits
+        # Draw num_samples from gs distribution
+        gs_input = gs_input.repeat(self.num_edge_samples, 1, 1, 1)
+        soft = torch.nn.functional.gumbel_softmax(gs_input, hard=True, dim=3)
+        # Clamp adj to 1
+        edges = self.ste(soft.sum(dim=0))
+        adj_idx = edges.nonzero().T
+        adj_vals = edges[adj_idx.unbind()]
+        # Remove self edges
+        # TODO: do we want to keep or remove?
+        mask = adj_idx[1] == adj_idx[2]
+        adj_idx = adj_idx[:,~mask]
+        adj_vals = adj_vals[~mask]
 
-        v1_mag = taus + T
-        v2_mag = taus
-        num_nodes = torch.sum(v1_mag * v2_mag)
-
-
-
-        net_in = torch.zeros(
-            (num_nodes, 2 * nodes.shape[-1]),
-            device=nodes.device
+        adj = torch.sparse_coo_tensor(
+            indices=adj_idx,
+            values=adj_vals,
+            size=(B, nodes.shape[1], nodes.shape[1])
         )
+        return adj
+
+
+
+
+
         
-        stop_idx = (taus * (T + taus)).cumsum(dim=0)
-        start_idx = stop_idx.roll(1)
-        start_idx[0] = 0
 
 
-        adj_idxs = []
-        adj_vals = []
+
+
         for b in range(B):
             # Construct all valid edge combinations
             edge_idx = torch.tril_indices(
@@ -100,22 +130,7 @@ class LearnedEdge(torch.nn.Module):
 
             sink_nodes = nodes[b, sink_idx]
             source_nodes = nodes[b, source_idx]
-            """
-            sink_idx_idx = torch.where(sink_B_idxs == b)
-            sink_idx = sink_B_idxs[sink_idx_idx], sink_tau_idxs[sink_idx_idx]
-            sink_nodes = nodes[sink_idx]
 
-            source_idx_idx = torch.where(source_B_idxs == b)
-            source_idx = source_B_idxs[source_idx_idx], source_tau_idxs[source_idx_idx]
-            source_nodes = nodes[source_idx]
-
-            left_nodes = sink_nodes.repeat(T[b] + taus[b], 1)
-            left_idx = sink_idx_idx[0].repeat(T[b] + taus[b])
-            right_nodes = source_nodes.repeat_interleave(taus[b], 0)
-            right_idx = source_idx_idx[0].repeat_interleave(T[b] + taus[b])
-            """
-
-            #net_in[start_idx[b]:stop_idx[b]] = torch.cat((left_nodes, right_nodes), dim=-1)
             # Thru network for logits
             network_input = torch.cat((sink_nodes, source_nodes), dim=-1)
             logits = self.edge_network(network_input).squeeze()

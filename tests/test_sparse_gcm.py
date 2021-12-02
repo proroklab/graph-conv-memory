@@ -515,15 +515,15 @@ class TestDenseVsSparse(unittest.TestCase):
                     )
     def test_learned_edges(self):
         self.dense_gcm = DenseGCM(
-            self.dense_g, edge_selectors=DLearnedEdge(self.F), graph_size=8
+            self.dense_g, edge_selectors=DLearnedEdge(self.F), graph_size=5
         )
         self.sparse_gcm = SparseGCM(
-            self.sparse_g, edge_selectors=SLearnedEdge(self.F), graph_size=8
+            self.sparse_g, edge_selectors=SLearnedEdge(self.F), graph_size=5
         )
         F = self.F
         B = 3
-        ts = 8
-        self.obs = torch.ones((B, ts, F)) * torch.arange(8)[None, :, None]
+        ts = 4
+        self.obs = torch.ones((B, ts, F)) * torch.arange(4)[None, :, None]
         self.obs[1] *= -1
         self.obs[2] *= 10
 

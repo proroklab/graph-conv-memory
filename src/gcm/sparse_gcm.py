@@ -140,10 +140,10 @@ class SparseGCM(torch.nn.Module):
         if self.positional_encoder:
             dirty_nodes = self.positional_encoder(dirty_nodes)
         if self.aux_edge_selectors:
-            raise NotImplementedError()
-            edges, weights, edge_B_idxs = self.edge_selectors(
-                dirty_nodes, edges, weights, T, taus, B
-            )
+            new_adj = self.edge_selectors(dirty_nodes, T, taus, B)
+            new_idx = torch.cat([adj._indices(), new_adj._indices()], dim=-1) 
+            new_val = torch.cat([adj._values(), new_adj._values()], dim=-1)
+            adj = torch.sparse_coo_tensor(indices=new_idx, values=new_val, size=adj.shape)
 
         # Convert to GNN input format
         flat_nodes, output_node_idxs = util.flatten_nodes(dirty_nodes, T, taus, B)
