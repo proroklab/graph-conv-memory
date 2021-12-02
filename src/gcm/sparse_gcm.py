@@ -50,6 +50,7 @@ class SparseGCM(torch.nn.Module):
         self.aux_edge_selectors = aux_edge_selectors
         self.positional_encoder = positional_encoder
         self.max_hops = max_hops
+        self.ste = util.StraightThroughEstimator()
 
     def get_initial_hidden_state(self, x):
         """Given a dummy x of shape [B, feats], construct
@@ -148,6 +149,8 @@ class SparseGCM(torch.nn.Module):
         # Convert to GNN input format
         flat_nodes, output_node_idxs = util.flatten_nodes(dirty_nodes, T, taus, B)
         edges, weights, edge_batch = util.flatten_adj(adj, T, taus, B)
+        # Flatten/unflatten coalesces adj, make sure the adj we return is coalesced
+        # adj = util.unflatten_adj(edges, weights, edge_batch, T, taus, B, nodes.shape[1])
         # Our adj matrix is sink -> source, but torch_geometric
         # expects edgelist as source -> sink, so flip
         edges = torch.flip(edges, (0,))
@@ -182,4 +185,14 @@ class SparseGCM(torch.nn.Module):
         mx_dense[dense_B_idxs, dense_tau_idxs] = mx
 
         T = T + taus
+        # TODO: this probably fucks up gradients, do something about it
+        adj = adj.coalesce()
+        ste_vals = self.ste(adj.values())
+        adj = torch.sparse_coo_tensor(
+            indices=adj.indices(),
+            values=ste_vals,
+            size=adj.shape,
+            device=adj.device
+        )
+
         return mx_dense, (nodes, adj, T)
