@@ -93,6 +93,9 @@ class LearnedEdge(torch.nn.Module):
             window_mask = edge[1] >= window_min_idx
             # Remove edges outside of window
             edge = edge[:, window_mask]
+            # Filter edges -- we only want incoming edges to tau nodes
+            # we should have no sinks < T
+            edge = edge[:, edge[0] >= T[b]]
 
 
             batch = b * torch.ones(edge[-1].shape[-1], device=nodes.device, dtype=torch.long)
@@ -142,6 +145,7 @@ class LearnedEdge(torch.nn.Module):
         # and the sampled results, to propagate grad thru adj_vals
         sampled_vals = valid_edges[valid_edge_mask]
 
+
         adj = torch.sparse_coo_tensor(
             indices=sampled_idx,
             values=sampled_vals,
@@ -149,65 +153,3 @@ class LearnedEdge(torch.nn.Module):
         )
         return adj
 
-
-
-
-
-        
-
-
-
-
-        for b in range(B):
-            # Construct all valid edge combinations
-            edge_idx = torch.tril_indices(
-                T[b] + taus[b], T[b] + taus[b], offset=-1
-            )
-            # Don't evaluate incoming edges for the T entries, as we are only
-            # interested in incoming data for T + tau
-            sink_idx, source_idx = edge_idx[:, edge_idx[0] > T[b]] 
-
-            sink_nodes = nodes[b, sink_idx]
-            source_nodes = nodes[b, source_idx]
-
-            # Thru network for logits
-            network_input = torch.cat((sink_nodes, source_nodes), dim=-1)
-            logits = self.edge_network(network_input).squeeze()
-
-            # Logits to probabilities via gumbel softmax
-            gs_in = logits.repeat(self.num_edge_samples, 1, 1)
-            soft = torch.nn.functional.gumbel_softmax(gs_in, hard=True)
-            # Store gumbel softmax output so we can propagate their gradients
-            # thru weights/values in the adj
-            sampled_edge_grad_path = self.ste(soft.sum(dim=0)).squeeze(0)
-            sampled_edge_idx = sampled_edge_grad_path.nonzero().squeeze(1)
-
-            # Add [B, source, sink] edge indices
-            adj_idx = torch.stack((
-                b * torch.ones(sampled_edge_idx.shape[-1]),
-                sink_idx[sampled_edge_idx],
-                source_idx[sampled_edge_idx],
-            ))
-            adj_idxs.append(adj_idx)
-
-            # Gradients are stored here
-            adj_vals.append(sampled_edge_grad_path[sampled_edge_idx])
-
-
-        indices = torch.cat(adj_idxs, dim=-1)
-        values = torch.cat(adj_vals)
-
-        adj = torch.sparse_coo_tensor(
-            indices=indices,
-            values=values,
-            size=(B, nodes.shape[1], nodes.shape[1])
-        )
-        return adj
-
-
-
-        #logits = self.edge_network(net_in).squeeze() 
-        # Logits are indexed as [B, T*tau
-        
-
-            
