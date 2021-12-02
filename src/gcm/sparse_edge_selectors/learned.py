@@ -5,7 +5,7 @@ from torchtyping import TensorType, patch_typeguard  # type: ignore
 from typeguard import typechecked  # type: ignore
 from gcm import util
 
-patch_typeguard()
+#patch_typeguard()
 
 
 class LearnedEdge(torch.nn.Module):
@@ -61,12 +61,14 @@ class LearnedEdge(torch.nn.Module):
         B: int,
         ) -> TensorType["B", "N", "N", float, torch.sparse_coo]:  # type: ignore # noqa: F821
 
-        """
         # No edges to create
         if (T + taus).max() <= 1:
-            return torch.zeros((2, 0), dtype=torch.long, device=nodes.device), torch.zeros((0), dtype=torch.long, device=nodes.device)
-        """
-
+            return torch.sparse_coo_tensor(
+                indices=torch.zeros(3,0, dtype=torch.long, device=nodes.device),
+                values=torch.zeros(0, device=nodes.device),
+                size=(B, nodes.shape[1], nodes.shape[1])
+            )
+                
         if self.edge_network[0].weight.device != nodes.device:
             self.edge_network = self.edge_network.to(nodes.device)
 
@@ -84,7 +86,9 @@ class LearnedEdge(torch.nn.Module):
             else:
                 window_min_idx = 0
             edge = torch.tril_indices(
-                T[b] + taus[b], T[b] + taus[b], offset=-1, dtype=torch.long,
+                T[b] + taus[b], T[b] + taus[b], offset=-1, 
+                dtype=torch.long,
+                device=nodes.device,
             )
             window_mask = edge[1] >= window_min_idx
             # Remove edges outside of window
@@ -106,6 +110,9 @@ class LearnedEdge(torch.nn.Module):
         logits = self.edge_network(network_input).squeeze()
         # TODO rather than sparse to dense conversion, implement
         # a sparse gumbel softmax
+        # TODO: This will be a dense NxN matrix at some point
+        # we should offset max() - min()
+        # MAKE SURE TO RETRANSFORM INDICES BELOW
         gs_input = torch.empty(
             (batch_idx.max() + 1, sink_idx.max() + 1, source_idx.max() + 1),
             device=nodes.device, dtype=torch.float

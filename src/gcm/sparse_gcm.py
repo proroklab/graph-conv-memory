@@ -6,7 +6,7 @@ from typing import Union, Tuple, List
 from torchtyping import TensorType, patch_typeguard  # type: ignore
 from typeguard import typechecked
 
-patch_typeguard()
+#patch_typeguard()
 
 
 class SparseGCM(torch.nn.Module):
@@ -138,9 +138,9 @@ class SparseGCM(torch.nn.Module):
         if self.preprocessor:
             dirty_nodes = self.preprocessor(dirty_nodes)
         if self.positional_encoder:
-            dirty_nodes = self.positional_encoder(dirty_nodes)
+            dirty_nodes = self.positional_encoder(dirty_nodes, T + taus)
         if self.aux_edge_selectors:
-            new_adj = self.edge_selectors(dirty_nodes, T, taus, B)
+            new_adj = self.aux_edge_selectors(dirty_nodes, T, taus, B)
             new_idx = torch.cat([adj._indices(), new_adj._indices()], dim=-1) 
             new_val = torch.cat([adj._values(), new_adj._values()], dim=-1)
             adj = torch.sparse_coo_tensor(indices=new_idx, values=new_val, size=adj.shape)
