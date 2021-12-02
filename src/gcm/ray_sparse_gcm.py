@@ -198,10 +198,10 @@ class RaySparseGCM(TorchModelV2, nn.Module):
         init_batch_idx = (state[-1] == 0).nonzero().squeeze()
         state[1][init_batch_idx] = -1
         state[2][init_batch_idx] = 1.0
-        nodes, edges, weights, T = util.unpack_hidden(state, B)
+        nodes, adj, T = util.unpack_hidden(state, B)
 
-        edges, T = edges.long(), T.long()
-        hidden = (nodes, edges, weights, T)
+        adj, T = adj.long(), T.long()
+        hidden = (nodes, adj, T)
 
         # Push thru pre-gcm layers
         out, hidden = self.gcm(dense, taus, hidden)
