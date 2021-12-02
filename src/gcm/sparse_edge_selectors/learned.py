@@ -119,22 +119,32 @@ class LearnedEdge(torch.nn.Module):
         ).fill_(torch.finfo(torch.float).min)
         gs_input[batch_idx, sink_idx, source_idx] = logits
         # Draw num_samples from gs distribution
+        # TODO mismatch between adj_idx and edge_idx
+        # e.g. 0,0,0 is not in edge_idx but is in adj_idx
+        #
+        # it is performing softmax even on rows of all zeros
+        # and selecting an entry with 1e-38 prob
         gs_input = gs_input.repeat(self.num_edge_samples, 1, 1, 1)
         soft = torch.nn.functional.gumbel_softmax(gs_input, hard=True, dim=3)
         # Clamp adj to 1
         edges = self.ste(soft.sum(dim=0))
-        adj_idx = edges.nonzero().T
-        adj_vals = edges[adj_idx.unbind()]
-        # Remove self edges
-        # TODO: do we want to keep so the network can learn
-        # "no edges"?
-        mask = adj_idx[1] != adj_idx[2]
-        adj_idx = adj_idx[:,mask]
-        adj_vals = adj_vals[mask]
+        # Only extract valid edges
+        # as we min-padded the gs_input matrix to make it dense.
+        # Rows < T should be all zero (not have any incoming edges)
+        # but gs will have made these rows nonzero
+        # so let's ignore the padded rows and only extract the valid sampled edges
+        valid_edges = edges[batch_idx, sink_idx, source_idx] 
+        # Of 
+        valid_edge_mask = valid_edges > 0
+
+        # Sampled edge indices
+        sampled_idx = edge_idx[:, valid_edge_mask]
+        # and the sampled results, to propagate grad thru adj_vals
+        sampled_vals = valid_edges[valid_edge_mask]
 
         adj = torch.sparse_coo_tensor(
-            indices=adj_idx,
-            values=adj_vals,
+            indices=sampled_idx,
+            values=sampled_vals,
             size=(B, nodes.shape[1], nodes.shape[1])
         )
         return adj
