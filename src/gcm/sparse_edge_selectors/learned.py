@@ -13,10 +13,18 @@ class LearnedEdge(torch.nn.Module):
 
     def __init__(
         self, 
+        # Feature size of a graph node
         input_size: int = 0,
+        # Number of edges to sample per node (upper bounds the
+        # number of edges for each node)
         num_edge_samples: int = 5,
+        # Whether to randomly sample using gumbel softmax
+        # or use sparsemax
         deterministic: bool = False,
-        window: int = 0
+        # Only consider edges to vertices in a fixed-size window
+        # this reduces memory usage but prohibits edges to nodes outside
+        # the window. Use None for no window (all possible edges)
+        window: Union[int, None] = None
     ):
         super().__init__()
         self.deterministic = deterministic
@@ -27,6 +35,7 @@ class LearnedEdge(torch.nn.Module):
         if deterministic:
             self.sm = util.Spardmax()
         self.ste = util.StraightThroughEstimator()
+        self.window = window
 
     def build_edge_network(self, input_size: int) -> torch.nn.Sequential:
         """Builds a network to predict edges.
@@ -52,9 +61,11 @@ class LearnedEdge(torch.nn.Module):
         B: int,
         ) -> TensorType["B", "N", "N", float, torch.sparse_coo]:  # type: ignore # noqa: F821
 
+        """
         # No edges to create
         if (T + taus).max() <= 1:
             return torch.zeros((2, 0), dtype=torch.long, device=nodes.device), torch.zeros((0), dtype=torch.long, device=nodes.device)
+        """
 
         if self.edge_network[0].weight.device != nodes.device:
             self.edge_network = self.edge_network.to(nodes.device)
@@ -63,13 +74,23 @@ class LearnedEdge(torch.nn.Module):
 
         # Do for all batches at once
         #
-        # Construct indices denoting all edges we want to sample from
+        # Construct indices denoting all edges, which we sample from
         # Note that we only want to sample incoming edges from nodes T to T + tau
         edge_idx = []
         for b in range(B):
+            # Use windows to reduce size, in case the graph is too big
+            if self.window is not None:
+                window_min_idx = max(0, T[b] - self.window)
+            else:
+                window_min_idx = 0
             edge = torch.tril_indices(
                 T[b] + taus[b], T[b] + taus[b], offset=-1, dtype=torch.long,
             )
+            window_mask = edge[1] >= window_min_idx
+            # Remove edges outside of window
+            edge = edge[:, window_mask]
+
+
             batch = b * torch.ones(edge[-1].shape[-1], device=nodes.device, dtype=torch.long)
             edge_idx.append(torch.cat((batch.unsqueeze(0), edge), dim=0))
 
@@ -98,10 +119,11 @@ class LearnedEdge(torch.nn.Module):
         adj_idx = edges.nonzero().T
         adj_vals = edges[adj_idx.unbind()]
         # Remove self edges
-        # TODO: do we want to keep or remove?
-        mask = adj_idx[1] == adj_idx[2]
-        adj_idx = adj_idx[:,~mask]
-        adj_vals = adj_vals[~mask]
+        # TODO: do we want to keep so the network can learn
+        # "no edges"?
+        mask = adj_idx[1] != adj_idx[2]
+        adj_idx = adj_idx[:,mask]
+        adj_vals = adj_vals[mask]
 
         adj = torch.sparse_coo_tensor(
             indices=adj_idx,
