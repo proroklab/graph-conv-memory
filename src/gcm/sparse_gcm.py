@@ -164,7 +164,10 @@ class SparseGCM(torch.nn.Module):
             # Each mx is variable in temporal dim, so return 2D tensor of [B*tau, feat]
             mx = node_feats[output_node_idxs]
         else:
-            # Convolve over subgraph (more efficient)
+            # Convolve over subgraph (more efficient) induced by the
+            # target nodes (taus)
+            # i.e. ignore nodes/edges that are not connected
+            # to the tau (input) nodes
             (
                 subnodes,
                 subedges,
