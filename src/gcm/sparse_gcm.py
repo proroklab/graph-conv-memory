@@ -157,23 +157,27 @@ class SparseGCM(torch.nn.Module):
         assert torch.all(edges[0] < edges[1]), "Causality violated"
         if edges.numel() > 0:
             edges, weights = torch_geometric.utils.coalesce(edges, weights)
-        if self.max_hops is not None:
-            raise NotImplementedError("Max_hops is not yet implemented")
+        if self.max_hops is None:
+            # Convolve over entire graph
+            node_feats = self.gnn(flat_nodes, edges, weights)
+            # Extract the hidden repr at the new nodes
+            # Each mx is variable in temporal dim, so return 2D tensor of [B*tau, feat]
+            mx = node_feats[output_node_idxs]
+        else:
+            # Convolve over subgraph (more efficient)
             (
                 subnodes,
                 subedges,
                 node_map,
                 edge_mask,
-            ) = torch_geometric.utils.k_hop_subgraph(
-                output_node_idxs,
-                self.max_hops,
-                edges,
-                num_nodes=output_node_idxs.shape[0],
+            )  = torch_geometric.utils.k_hop_subgraph(
+                output_node_idxs, 
+                self.max_hops, 
+                edges, 
+                relabel_nodes=True,
+                num_nodes=(T + taus).sum()
             )
-        node_feats = self.gnn(flat_nodes, edges, weights)
-        # Extract the hidden repr at the new nodes
-        # Each mx is variable in temporal dim, so return 2D tensor of [B*tau, feat]
-        mx = node_feats[output_node_idxs]
+            mx = self.gnn(flat_nodes[subnodes], subedges, weights[edge_mask])[node_map]
 
         assert torch.all(
             torch.isfinite(mx)
@@ -181,7 +185,7 @@ class SparseGCM(torch.nn.Module):
 
         # Input obs were dense and padded, so output should be dense and padded
         dense_B_idxs, dense_tau_idxs = util.get_nonpadded_idxs(T, taus, B)
-        mx_dense = torch.zeros((*x.shape[:-1], node_feats.shape[-1]), device=x.device)
+        mx_dense = torch.zeros((*x.shape[:-1], mx.shape[-1]), device=x.device)
         mx_dense[dense_B_idxs, dense_tau_idxs] = mx
 
         T = T + taus

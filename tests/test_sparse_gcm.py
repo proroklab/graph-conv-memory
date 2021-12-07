@@ -427,6 +427,79 @@ class TestDenseVsSparse(unittest.TestCase):
             self.fail(f"{dense_outs} != {sparse_outs}")
 
 
+    def test_temporal_edges_2_hop(self):
+        self.dense_gcm = DenseGCM(
+            self.dense_g, edge_selectors=TemporalBackedge([1, 2]), graph_size=8
+        )
+        self.sparse_gcm = SparseGCM(
+            self.sparse_g, edge_selectors=TemporalEdge([1, 2]), graph_size=8, max_hops=2
+        )
+        F = self.F
+        B = 3
+        ts = 8
+        self.obs = torch.arange(B * ts * F, dtype=torch.float32).reshape(B, ts, F)
+
+        dense_outs = []
+
+        dense_hidden = None
+        for i in range(ts):
+            dense_out, dense_hidden = self.dense_gcm(self.obs[:, i], dense_hidden)
+            dense_outs.append(dense_out)
+        dense_outs = torch.stack(dense_outs, dim=1)
+
+        taus = torch.ones(B, dtype=torch.long) * ts
+        sparse_outs, sparse_hidden = self.sparse_gcm(self.obs, taus, None)
+
+        if dense_outs.numel() != sparse_outs.numel():
+            self.fail(f"sizes {dense_outs.numel()} != {sparse_outs.numel()}")
+
+        # Check hiddens
+        if not torch.all(dense_hidden[0] == sparse_hidden[0]):
+            self.fail(f"{dense_hidden[0]} != {sparse_hidden[0]}")
+
+        if not torch.all(dense_hidden[1].nonzero().T == sparse_hidden[1].coalesce().indices()):
+            self.fail(f"dense and sparse edges inequal: \n{dense_hidden[1].nonzero().T} != \n{sparse_hidden[1]._indices()}")
+
+        if not torch.all(dense_outs == sparse_outs):
+            self.fail(f"{dense_outs} != {sparse_outs}")
+
+
+    def test_temporal_edges_many_iter_2_hop(self):
+        self.dense_gcm = DenseGCM(
+            self.dense_g, edge_selectors=TemporalBackedge([1, 2]), graph_size=8
+        )
+        self.sparse_gcm = SparseGCM(
+            self.sparse_g, edge_selectors=TemporalEdge([1, 2]), graph_size=8, max_hops=2
+        )
+        F = self.F
+        B = 3
+        ts = 8
+        self.obs = torch.arange(B * ts * F, dtype=torch.float32).reshape(B, ts, F)
+
+        dense_outs = []
+
+        dense_hidden = None
+        for i in range(ts):
+            dense_out, dense_hidden = self.dense_gcm(self.obs[:, i], dense_hidden)
+            dense_outs.append(dense_out)
+        dense_outs = torch.stack(dense_outs, dim=1)
+
+        sparse_hidden = None
+        taus = torch.ones(B, dtype=torch.long)
+        sparse_outs = []
+        for i in range(ts):
+            sparse_out, sparse_hidden = self.sparse_gcm(self.obs[:,i].unsqueeze(1), taus, sparse_hidden)
+            sparse_outs.append(sparse_out)
+        sparse_outs = torch.cat(sparse_outs, dim=1)
+
+        if dense_outs.numel() != sparse_outs.numel():
+            self.fail(f"sizes {dense_outs.numel()} != {sparse_outs.numel()}")
+
+        if not torch.all(dense_hidden[1].nonzero().T == sparse_hidden[1].coalesce().indices()):
+            self.fail(f"sparse and dense edges inequal: \n{dense_hidden[1].nonzero().T} != \n{sparse_hidden[1].coalesce().indices()}")
+
+        if not torch.all(dense_outs == sparse_outs):
+            self.fail(f"{dense_outs} != {sparse_outs}")
     def test_temporal_edges_many_iter(self):
         self.dense_gcm = DenseGCM(
             self.dense_g, edge_selectors=TemporalBackedge([1, 2]), graph_size=8
@@ -573,6 +646,41 @@ class TestDenseVsSparse(unittest.TestCase):
 
         if not torch.all(dense_outs == sparse_outs):
             self.fail(f"{dense_outs} != {sparse_outs}")
+
+
+
+
+class DummyEdgenet(torch.nn.Module):
+    def forward(x):
+        if torch.all(x[:x.shape[-1]//2] == x[x.shape[-1]//2:]):
+            return 1
+        else:
+            return -1e15
+
+class TestLearnedEdge(unittest.TestCase):
+    def __init__(self):
+        self.F = 3
+        sparse_conv_type = torch_geometric.nn.GraphConv
+        self.sparse_g = torch_geometric.nn.Sequential(
+            "x, edges, weights",
+            [
+                (sparse_conv_type(self.F, self.F), "x, edges, weights -> x"),
+                (sparse_conv_type(self.F, self.F), "x, edges, weights -> x"),
+            ],
+        )
+        self.sparse_gcm = SparseGCM(
+            self.sparse_g, edge_selectors=SLearnedEdge(self.F), graph_size=5
+        )
+
+
+
+    def test_one_pass(self):
+        B = 3
+        gsize = 10
+        taus = torch.ones(B) * 2
+        T = torch.ones(B) * 4
+        self.obs = torch.zeros(B, taus.max(), self.F)
+
 
 
 if __name__ == "__main__":
