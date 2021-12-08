@@ -193,11 +193,9 @@ class SparseGCM(torch.nn.Module):
 
         T = T + taus
         # TODO: this probably fucks up gradients, do something about it
-        adj = adj.coalesce()
-        ste_vals = self.ste(adj.values())
         adj = torch.sparse_coo_tensor(
-            indices=adj.indices(),
-            values=ste_vals,
+            indices=adj._indices(),
+            values=self.ste(adj._values()),
             size=adj.shape,
             device=adj.device
         )
