@@ -55,7 +55,6 @@ class Hardmax(torch.nn.Module):
         return y_hard - y_soft.detach() + y_soft
 
 
-@torch.jit.script
 def get_nonpadded_idxs(T: torch.Tensor, taus: torch.Tensor, B: int):
     """Get the non-padded indices of a zero-padded
     batch of observations. In other words, get only valid elements and discard
@@ -70,7 +69,6 @@ def get_nonpadded_idxs(T: torch.Tensor, taus: torch.Tensor, B: int):
     return dense_B_idxs, dense_tau_idxs
 
 
-@torch.jit.script
 def get_new_node_idxs(T: torch.Tensor, taus: torch.Tensor, B: int):
     """Given T and tau tensors, return indices matching batches to taus.
     These tell us which elements in the node matrix we have just added
@@ -90,7 +88,6 @@ def get_new_node_idxs(T: torch.Tensor, taus: torch.Tensor, B: int):
     return B_idxs, tau_idxs
 
 
-@torch.jit.script
 def get_valid_node_idxs(T: torch.Tensor, taus: torch.Tensor, B: int):
     """Given T and tau tensors, return indices matching batches to taus.
     These tell us which elements in the node matrix are valid for convolution,
@@ -122,7 +119,7 @@ def get_batch_offsets(T: torch.Tensor):
     return batch_starts, batch_ends
 
 
-def flatten_adj(adj, T, taus, B):
+def flatten_adj(adj: torch.Tensor, T: torch.Tensor, taus: torch.Tensor, B: int):
     """Flatten a torch.coo_sparse [B, MAX_NODES, MAX_NODES] to [2, NE] and
     adds offsets to avoid collisions.
     This readies a sparse tensor for torch_geometric GNN
@@ -171,6 +168,7 @@ def _pack_hidden(
 	adj: torch.Tensor,
 	T: torch.Tensor,
 	B: int,
+        # Max edges per-batch
 	max_edges: int,
 	edge_fill: int = -1,
 	weight_fill: float = 1.0,
@@ -186,10 +184,10 @@ def _pack_hidden(
         # No edges in batch
         if sparse_b_idx.numel() == 0:
             continue
-        assert sparse_b_idx.max() < max_edges, (
+        assert sparse_b_idx.numel() < max_edges, (
             f"Too many edges to pack ({sparse_b_idx.max()}), consider increasing max_edges ({max_edges})"
         )
-        dense_b_idx = torch.arange(sparse_b_idx.shape[0])
+        dense_b_idx = torch.arange(sparse_b_idx.numel())
         dense_edges[b, :, dense_b_idx] = adj._indices()[1:, sparse_b_idx]
         dense_weights[b, 0, dense_b_idx] = adj._values()[sparse_b_idx]
 
@@ -203,7 +201,7 @@ def _unpack_hidden(
     edges: torch.Tensor,
     weights: torch.Tensor,
     T: torch.Tensor,
-    B: torch.Tensor
+    B: int
 ):
     """Convert a ray dense edgelist into a torch.coo_sparse tensor"""
     # Get indices of valid edge pairs
@@ -214,12 +212,9 @@ def _unpack_hidden(
 
     adj_idx = torch.stack([batch_idx, sources, sinks])
     weights_filtered = weights[batch_idx, 0, edge_idx]
-    #sink_idx = edges[batch_idx, 1, source_idx]
-    #adj_idx = torch.stack([batch_idx, source_idx, sink_idx])
-
 
     adj = torch.sparse_coo_tensor(
-        indices=adj_idx, values=weights_filtered, size=(B, nodes.shape[1], nodes.shape[1])
+        indices=adj_idx.long(), values=weights_filtered, size=[B, nodes.shape[1], nodes.shape[1]]
     )
 
     return nodes, adj, T
