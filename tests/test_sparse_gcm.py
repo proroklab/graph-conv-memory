@@ -651,14 +651,16 @@ class TestDenseVsSparse(unittest.TestCase):
 
 
 class DummyEdgenet(torch.nn.Module):
-    def forward(x):
-        if torch.all(x[:x.shape[-1]//2] == x[x.shape[-1]//2:]):
-            return 1
-        else:
-            return -1e15
+    def __init__(self):
+        super().__init__()
+        self.ghost = torch.nn.Linear(1, 1)
+
+    def forward(self, x):
+        return 1e15 * torch.all(x > 0, dim=1).float()
+
 
 class TestLearnedEdge(unittest.TestCase):
-    def __init__(self):
+    def setUp(self):
         self.F = 3
         sparse_conv_type = torch_geometric.nn.GraphConv
         self.sparse_g = torch_geometric.nn.Sequential(
@@ -668,18 +670,97 @@ class TestLearnedEdge(unittest.TestCase):
                 (sparse_conv_type(self.F, self.F), "x, edges, weights -> x"),
             ],
         )
-        self.sparse_gcm = SparseGCM(
-            self.sparse_g, edge_selectors=SLearnedEdge(self.F), graph_size=5
+
+
+
+    def test_first_pass(self):
+        B = 2
+        gsize = 5
+        taus = torch.ones(B, dtype=torch.long) * 5
+        T = torch.zeros(B)
+        obs = torch.zeros(B, taus.max().int(), self.F)
+        obs[0,0] = 1
+        obs[0,4] = 1
+        obs[1,1] = 1
+        obs[1,4] = 1
+        sel = SLearnedEdge(input_size=0, model=DummyEdgenet(), num_edge_samples=1)
+        gcm = SparseGCM(
+            self.sparse_g, graph_size=gsize, edge_selectors=sel
         )
 
-
-
-    def test_one_pass(self):
-        B = 3
+        out, hidden = gcm(obs, taus, hidden=None)
+        # Should result in edges:
+        #b0: [1,0], [2,?], [3,?], [4,0]
+        #b1: [1,0], [2,?], [3,?], [4,1]
+        self.assertTrue(torch.tensor([0, 1, 0]) in hidden[1]._indices().T)
+        self.assertTrue(torch.tensor([0, 4, 0]) in hidden[1]._indices().T)
+        self.assertTrue(torch.tensor([1, 1, 0]) in hidden[1]._indices().T)
+        self.assertTrue(torch.tensor([1, 4, 1]) in hidden[1]._indices().T)
+        
+    def test_second_pass(self):
+        B = 2
         gsize = 10
-        taus = torch.ones(B) * 2
-        T = torch.ones(B) * 4
-        self.obs = torch.zeros(B, taus.max(), self.F)
+        taus = torch.ones(B, dtype=torch.long) * 5
+        T = torch.zeros(B)
+        obs = torch.zeros(B, taus.max().int(), self.F)
+        obs[0,0] = 1
+        obs[0,4] = 1
+        obs[1,1] = 1
+        obs[1,4] = 1
+        sel = SLearnedEdge(input_size=0, model=DummyEdgenet(), num_edge_samples=1)
+        gcm = SparseGCM(
+            self.sparse_g, graph_size=gsize, edge_selectors=sel
+        )
+
+        out, hidden = gcm(obs, taus, hidden=None)
+        # Should result in edges:
+        #b0: [1,0], [2,?], [3,?], [4,0]
+        #b1: [1,0], [2,?], [3,?], [4,1]
+        self.assertTrue(torch.tensor([0, 1, 0]) in hidden[1]._indices().T)
+        self.assertTrue(torch.tensor([0, 4, 0]) in hidden[1]._indices().T)
+        self.assertTrue(torch.tensor([1, 1, 0]) in hidden[1]._indices().T)
+        self.assertTrue(torch.tensor([1, 4, 1]) in hidden[1]._indices().T)
+
+        # Second pass
+        # should have first pass edges
+        out, hidden = gcm(obs, taus, hidden)
+        self.assertTrue(torch.tensor([0, 1, 0]) in hidden[1]._indices().T)
+        self.assertTrue(torch.tensor([0, 4, 0]) in hidden[1]._indices().T)
+        self.assertTrue(torch.tensor([1, 1, 0]) in hidden[1]._indices().T)
+        self.assertTrue(torch.tensor([1, 4, 1]) in hidden[1]._indices().T)
+
+
+    def test_multi_pass(self):
+        B = 2
+        gsize = 10
+        taus = torch.ones(B, dtype=torch.long)
+        T = torch.zeros(B)
+        obs = torch.zeros(B, gsize, self.F)
+        obs[0,0] = 1
+        obs[0,4] = 1
+        obs[1,1] = 1
+        obs[1,4] = 1
+        sel = SLearnedEdge(input_size=0, model=DummyEdgenet(), num_edge_samples=1)
+        gcm = SparseGCM(
+            self.sparse_g, graph_size=gsize, edge_selectors=sel
+        )
+        hidden = None
+        for i in range(gsize):
+            out, hidden = gcm(obs[:,i].unsqueeze(1), taus, hidden)
+
+        # Should result in edges:
+        #b0: [1,0], [2,?], [3,?], [4,0]
+        #b1: [1,0], [2,?], [3,?], [4,1]
+        self.assertTrue(torch.tensor([0, 1, 0]) in hidden[1]._indices().T)
+        self.assertTrue(torch.tensor([0, 4, 0]) in hidden[1]._indices().T)
+        self.assertTrue(torch.tensor([1, 1, 0]) in hidden[1]._indices().T)
+        self.assertTrue(torch.tensor([1, 4, 1]) in hidden[1]._indices().T)
+
+        # Ensure same as batched case
+        bout, bhidden = gcm(obs, taus * gsize, None)
+        self.assertTrue(bhidden[1].shape == hidden[1].shape)
+
+
 
 
 
