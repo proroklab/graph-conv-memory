@@ -120,17 +120,11 @@ class LearnedEdge(torch.nn.Module):
         # TODO: This will be a dense NxN matrix at some point
         # we should offset max() - min()
         # MAKE SURE TO RETRANSFORM INDICES BELOW
-        sink_shift = sink_idx.min()
-        source_shift = source_idx.min()
         gs_input = torch.empty(
-            (
-                batch_idx.max() + 1, 
-                sink_idx.max() - sink_shift + 1, 
-                source_idx.max() - source_shift + 1
-            ),
+            (batch_idx.max() + 1, sink_idx.max() + 1, source_idx.max() + 1),
             device=nodes.device, dtype=torch.float
         ).fill_(torch.finfo(torch.float).min)
-        gs_input[batch_idx, sink_idx - sink_shift, source_idx - source_shift] = logits
+        gs_input[batch_idx, sink_idx, source_idx] = logits
         # Draw num_samples from gs distribution
         # TODO mismatch between adj_idx and edge_idx
         # e.g. 0,0,0 is not in edge_idx but is in adj_idx
@@ -146,7 +140,7 @@ class LearnedEdge(torch.nn.Module):
         # Rows < T should be all zero (not have any incoming edges)
         # but gs will have made these rows nonzero
         # so let's ignore the padded rows and only extract the valid sampled edges
-        valid_edges = edges[batch_idx, sink_idx - sink_shift, source_idx - source_shift] 
+        valid_edges = edges[batch_idx, sink_idx, source_idx] 
         # Of 
         valid_edge_mask = valid_edges > 0
 
