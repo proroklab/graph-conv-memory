@@ -15,6 +15,8 @@ class LearnedEdge(torch.nn.Module):
         self, 
         # Feature size of a graph node
         input_size: int = 0,
+        # Custom model, if None, one will be created for you
+        model: Union[None, torch.nn.Module] = None,
         # Number of edges to sample per node (upper bounds the
         # number of edges for each node)
         num_edge_samples: int = 5,
@@ -27,11 +29,12 @@ class LearnedEdge(torch.nn.Module):
         window: Union[int, None] = None
     ):
         super().__init__()
+        assert model or input_size, "Must specify either input_size or model"
         self.deterministic = deterministic
         self.num_edge_samples = num_edge_samples
         # This MUST be done here
         # if initialized in forward model does not learn...
-        self.edge_network = self.build_edge_network(input_size)
+        self.edge_network = self.build_edge_network(input_size) if model is None else model
         if deterministic:
             self.sm = util.Spardmax()
         self.ste = util.StraightThroughEstimator()
@@ -69,7 +72,7 @@ class LearnedEdge(torch.nn.Module):
                 size=(B, nodes.shape[1], nodes.shape[1])
             )
                 
-        if self.edge_network[0].weight.device != nodes.device:
+        if list(self.edge_network.parameters())[0].device != nodes.device:
             self.edge_network = self.edge_network.to(nodes.device)
 
         # TODO: use window
@@ -100,6 +103,7 @@ class LearnedEdge(torch.nn.Module):
 
             batch = b * torch.ones(edge[-1].shape[-1], device=nodes.device, dtype=torch.long)
             edge_idx.append(torch.cat((batch.unsqueeze(0), edge), dim=0))
+
 
         # Shape [3, N] denoting batch, sink, source
         # these indices denote nodes pairs being fed to network
