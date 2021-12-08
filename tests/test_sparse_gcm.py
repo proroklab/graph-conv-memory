@@ -609,45 +609,6 @@ class TestDenseVsSparse(unittest.TestCase):
                     self.fail(
                         f"Parameters diverged: {v}, {self.dense_g.state_dict()[k]}"
                     )
-    def test_learned_edges(self):
-        self.dense_gcm = DenseGCM(
-            self.dense_g, edge_selectors=DLearnedEdge(self.F), graph_size=5
-        )
-        self.sparse_gcm = SparseGCM(
-            self.sparse_g, edge_selectors=SLearnedEdge(self.F), graph_size=5
-        )
-        F = self.F
-        B = 3
-        ts = 4
-        self.obs = torch.ones((B, ts, F)) * torch.arange(4)[None, :, None]
-        self.obs[1] *= -1
-        self.obs[2] *= 10
-
-        dense_outs = []
-
-        dense_hidden = None
-        for i in range(ts):
-            dense_out, dense_hidden = self.dense_gcm(self.obs[:, i], dense_hidden)
-            dense_outs.append(dense_out)
-        dense_outs = torch.stack(dense_outs, dim=1)
-
-        taus = torch.ones(B, dtype=torch.long) * ts
-        sparse_outs, sparse_hidden = self.sparse_gcm(self.obs, taus, None)
-
-        if dense_outs.numel() != sparse_outs.numel():
-            self.fail(f"sizes {dense_outs.numel()} != {sparse_outs.numel()}")
-
-        # Check hiddens
-        if not torch.all(dense_hidden[0] == sparse_hidden[0]):
-            self.fail(f"{dense_hidden[0]} != {sparse_hidden[0]}")
-
-        if not torch.all(dense_hidden[1].nonzero().T == sparse_hidden[1].coalesce().indices()):
-            self.fail(f"dense and sparse edges inequal: \n{dense_hidden[1].nonzero().T} != \n{sparse_hidden[1]._indices()}")
-
-        if not torch.all(dense_outs == sparse_outs):
-            self.fail(f"{dense_outs} != {sparse_outs}")
-
-
 
 
 class DummyEdgenet(torch.nn.Module):
@@ -759,6 +720,37 @@ class TestLearnedEdge(unittest.TestCase):
         # Ensure same as batched case
         bout, bhidden = gcm(obs, taus * gsize, None)
         self.assertTrue(bhidden[1].shape == hidden[1].shape)
+
+    def test_window_multi_pass(self):
+        B = 2
+        gsize = 4
+        taus = torch.ones(B, dtype=torch.long)
+        T = torch.zeros(B)
+        obs = torch.zeros(B, gsize, self.F)
+        sel = SLearnedEdge(input_size=0, model=DummyEdgenet(), num_edge_samples=1, window=1)
+        gcm = SparseGCM(
+            self.sparse_g, graph_size=gsize, edge_selectors=sel
+        )
+        hidden = None
+        for i in range(gsize):
+            out, hidden = gcm(obs[:,i].unsqueeze(1), taus, hidden)
+
+        # Should result in edges:
+        #b0: [1,0], [2,?], [3,?], [4,0]
+        #b1: [1,0], [2,?], [3,?], [4,1]
+        desired = torch.tensor(
+                [
+                    [0, 1, 0], 
+                    [0, 2, 1],
+                    [0, 3, 2],
+                    # second batch
+                    [1, 1, 0], 
+                    [1, 2, 1],
+                    [1, 3, 2],
+                ]
+        ).T
+        if not torch.all(hidden[1].coalesce().indices() == desired):
+            self.fail(f"{hidden[1].coalesce().indices()} != {desired}")
 
 
 
