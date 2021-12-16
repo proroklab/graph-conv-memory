@@ -112,8 +112,10 @@ def sparse_gumbel_softmax(
     scat_idx = y_soft._indices()[scat_dims]
     flat_scat_idx, offsets = flatten_idx_n_dim(scat_idx)
     maxes, argmax = scatter_max(y_soft._values(), flat_scat_idx)
-    # TODO: Sometimes argmax will give us argmax > nelem
-    # why is this? For now, just filter
+    # TODO: Sometimes argmax will give us out of bound indices 
+    # because dim_size < numel
+    # we would use the dim_size arg to scatter, but it crashes :(
+    # so instead just mask out invalid entries
     argmax_mask = argmax < y_soft._indices().shape[-1] 
     maxes = maxes[argmax_mask]
     argmax = argmax[argmax_mask]
