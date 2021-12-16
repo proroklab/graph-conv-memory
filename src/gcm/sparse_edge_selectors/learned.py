@@ -120,7 +120,7 @@ class LearnedEdge(torch.nn.Module):
         sparse_gs = True
         if sparse_gs:
             stacked_idx = torch.cat((
-                torch.arange(self.num_edge_samples
+                torch.arange(self.num_edge_samples, device=logits.device,
                     ).repeat_interleave(edge_idx.shape[-1]).unsqueeze(0),
                 edge_idx.repeat(1, self.num_edge_samples)
             ), dim=0)
