@@ -126,7 +126,7 @@ class LearnedEdge(torch.nn.Module):
             ), dim=0)
             gs_input = torch.sparse_coo_tensor(
                 stacked_idx,
-                logits.repeat(self.num_edge_samples), 
+                logits.repeat_interleave(self.num_edge_samples), 
                 size=(self.num_edge_samples, B, nodes.shape[1], nodes.shape[1])
             )
             soft = util.sparse_gumbel_softmax(gs_input, dim=3, hard=True)
