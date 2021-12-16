@@ -774,6 +774,34 @@ class TestUtil(unittest.TestCase):
         if flat.unique().shape != flat.shape:
             self.fail(f"Repeated elems {flat}")
 
+    def test_sparse_gumbel_softmax(self):
+        idx = torch.tensor([
+            [0, 0, 0, 0, 0, 0, 1, 1],
+            [0, 0, 0, 0, 1, 1, 1, 1],
+            [0, 1, 2, 2, 0, 5, 4, 4],
+            [0, 0, 1, 0, 0, 3, 0, 3]
+        ])
+        values = torch.ones(8) * 1e15
+        values[3] = 0
+        values[-1] = 0
+        a = torch.sparse_coo_tensor(idx, values, size=(2, 2, 100, 100))
+        res = util.sparse_gumbel_softmax(a, 3, hard=True)
+        desired_idx = torch.tensor([
+            [0, 0, 0, 0, 0, 1],
+            [0, 0, 0, 1, 1, 1],
+            [0, 1, 2, 0, 5, 4],
+            [0, 0, 1, 0, 3, 0]
+        ])
+        desired_values = torch.ones(6)
+        desired = torch.sparse_coo_tensor(
+                desired_idx, desired_values, size=(2, 2, 100, 100))
+        
+        if torch.any(res.coalesce().indices() != desired.coalesce().indices()):
+            self.fail(f"{res} != {desired}")
+        if torch.any(res.coalesce().values() != desired.coalesce().values()):
+            self.fail(f"{res} != {desired}")
+
+
 
 
 if __name__ == "__main__":
