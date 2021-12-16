@@ -106,12 +106,7 @@ def sparse_gumbel_softmax(
 
     index = []
     # Want to max across dim, so exclude it during scatter
-    scat_dims = torch.cat(
-        (
-            torch.arange(dim, device=logits.device), 
-            torch.arange(dim+1, logits._indices().shape[0], device=logits.device)
-        )
-    )
+    scat_dims = list(range(dim)) + list(range(dim+1, logits._indices().shape[0]))
     scat_idx = y_soft._indices()[scat_dims]
     flat_scat_idx, offsets = flatten_idx_n_dim(scat_idx)
     maxes, argmax = scatter_max(y_soft._values(), flat_scat_idx)
@@ -131,43 +126,6 @@ def sparse_gumbel_softmax(
         device=logits.device
     )
 
-
-    """
-    for b in y_soft._indices()[0].unique():
-        for n in y_soft._indices()[1].unique():
-            argmax = y_soft[b,n]._values().max(0)[1]
-            index.append(torch.tensor([b, n, argmax]))
-        
-    index = torch.stack(index).T
-    y_hard = torch.sparse_coo_tensor(
-        indices=logits._indices(),
-        values=torch.ones_like(logits._values()),
-        size=logits.shape,
-        device=logits.device
-    )
-    """
-    return y_hard - y_soft.detach() + y_soft
-
-
-    """
-    if hard:
-        # Straight thru
-        nelem = y_soft._indices().shape[-1]
-        flat_idx = flatten_idx(y_soft._indices()[:2])
-        index = scatter_max(y_soft._values(), flat_idx)[1]
-        #y_soft2 = torch.cat(
-        #        [torch.zeros(2, y_soft._values().shape[0]), y_soft._values().unsqueeze(0)], dim=0)
-        # TODO: dim should be changeable
-        #index = scatter_max(y_soft._values(), y_soft._indices()[1])[1]
-        #index = scatter_max(y_soft._values().repeat(2,1), y_soft._indices()[:2])[1]
-        import pdb; pdb.set_trace()
-        #index = y_soft.max(dim, keepdim=True)[1]
-        y_hard = torch.zeros_like(logits).scatter_(dim, index, 1.0)
-        ret = y_hard - y_soft.detach() + y_soft
-    else:
-        ret = y_soft
-    return ret
-    """
 
 
 
