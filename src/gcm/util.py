@@ -107,7 +107,10 @@ def sparse_gumbel_softmax(
     index = []
     # Want to max across dim, so exclude it during scatter
     scat_dims = torch.cat(
-        (torch.arange(dim), torch.arange(dim+1, logits._indices().shape[0]))
+        (
+            torch.arange(dim, device=logits.device), 
+            torch.arange(dim+1, logits._indices().shape[0], device=logits.device)
+        )
     )
     scat_idx = y_soft._indices()[scat_dims]
     flat_scat_idx, offsets = flatten_idx_n_dim(scat_idx)
