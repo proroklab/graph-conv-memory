@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import torch_geometric
+from torch_scatter import scatter_max, scatter
 #import sparsemax
 from typing import Tuple, List
 
@@ -54,7 +55,118 @@ class Hardmax(torch.nn.Module):
         y_hard = (y_soft > self.cutoff).float()
         return y_hard - y_soft.detach() + y_soft
 
+def sparse_max(x: torch.sparse_coo, dim: int=-1, keepdim=True):
+    vals, counts = torch.unique(x._indices(), return_counts=True)
+    max_size = counts.max()
+    dense = torch.empty(max_size).fill_(1e-20)
 
+def flatten_idx(idx):
+    return idx[0] * idx.shape[1] + idx[1]
+
+def unflatten_idx(idx, b):
+    b_idx = idx // b
+    f_idx = idx % b
+    return torch.stack((b_idx, f_idx))
+
+
+def flatten_idx_n_dim(idx):
+    assert idx.ndim == 2
+    strides = idx.max(dim=1).values + 1
+    #offsets = strides.cumprod(0).flip(0)
+    new_idx = torch.zeros(idx.shape[-1], dtype=torch.long, device=idx.device)
+    offsets = []
+
+    for i in range(len(strides) - 1):
+        offset = strides[i + 1:].prod()
+        offsets.append(offset)
+        new_idx += offset * idx[i]
+
+    new_idx += idx[-1]
+
+    return new_idx, offsets
+
+
+def sparse_gumbel_softmax(
+    logits: torch.sparse_coo, 
+    dim: int,
+    tau: float=1, 
+    hard: bool=False,
+    ) -> torch.sparse_coo:
+    gumbels = -torch.empty_like(logits._values()).exponential_().log()
+    gumbels = (logits._values() + gumbels) / tau
+    gumbels = torch.sparse_coo_tensor(
+        indices=logits._indices(),
+        values=logits._values(),
+        size=logits.shape
+    )
+    y_soft = torch.sparse.softmax(gumbels, dim=dim)
+
+    if not hard:
+        return y_soft
+
+    index = []
+    # Want to max across dim, so exclude it during scatter
+    scat_dims = torch.cat(
+        (torch.arange(dim), torch.arange(dim+1, logits._indices().shape[0]))
+    )
+    scat_idx = y_soft._indices()[scat_dims]
+    flat_scat_idx, offsets = flatten_idx_n_dim(scat_idx)
+    maxes, argmax = scatter_max(y_soft._values(), flat_scat_idx)
+    # TODO: Sometimes argmax will give us argmax > nelem
+    # why is this? For now, just filter
+    argmax_mask = argmax < y_soft._indices().shape[-1] 
+    maxes = maxes[argmax_mask]
+    argmax = argmax[argmax_mask]
+    index = y_soft._indices()[:, argmax]
+
+    return torch.sparse_coo_tensor(
+        indices=index,
+        values=maxes,
+        size=logits.shape,
+        device=logits.device
+    )
+
+
+    """
+    for b in y_soft._indices()[0].unique():
+        for n in y_soft._indices()[1].unique():
+            argmax = y_soft[b,n]._values().max(0)[1]
+            index.append(torch.tensor([b, n, argmax]))
+        
+    index = torch.stack(index).T
+    y_hard = torch.sparse_coo_tensor(
+        indices=logits._indices(),
+        values=torch.ones_like(logits._values()),
+        size=logits.shape,
+        device=logits.device
+    )
+    """
+    return y_hard - y_soft.detach() + y_soft
+
+
+    """
+    if hard:
+        # Straight thru
+        nelem = y_soft._indices().shape[-1]
+        flat_idx = flatten_idx(y_soft._indices()[:2])
+        index = scatter_max(y_soft._values(), flat_idx)[1]
+        #y_soft2 = torch.cat(
+        #        [torch.zeros(2, y_soft._values().shape[0]), y_soft._values().unsqueeze(0)], dim=0)
+        # TODO: dim should be changeable
+        #index = scatter_max(y_soft._values(), y_soft._indices()[1])[1]
+        #index = scatter_max(y_soft._values().repeat(2,1), y_soft._indices()[:2])[1]
+        import pdb; pdb.set_trace()
+        #index = y_soft.max(dim, keepdim=True)[1]
+        y_hard = torch.zeros_like(logits).scatter_(dim, index, 1.0)
+        ret = y_hard - y_soft.detach() + y_soft
+    else:
+        ret = y_soft
+    return ret
+    """
+
+
+
+@torch.jit.script
 def get_nonpadded_idxs(T: torch.Tensor, taus: torch.Tensor, B: int):
     """Get the non-padded indices of a zero-padded
     batch of observations. In other words, get only valid elements and discard
@@ -69,6 +181,7 @@ def get_nonpadded_idxs(T: torch.Tensor, taus: torch.Tensor, B: int):
     return dense_B_idxs, dense_tau_idxs
 
 
+@torch.jit.script
 def get_new_node_idxs(T: torch.Tensor, taus: torch.Tensor, B: int):
     """Given T and tau tensors, return indices matching batches to taus.
     These tell us which elements in the node matrix we have just added
@@ -88,6 +201,7 @@ def get_new_node_idxs(T: torch.Tensor, taus: torch.Tensor, B: int):
     return B_idxs, tau_idxs
 
 
+@torch.jit.script
 def get_valid_node_idxs(T: torch.Tensor, taus: torch.Tensor, B: int):
     """Given T and tau tensors, return indices matching batches to taus.
     These tell us which elements in the node matrix are valid for convolution,
@@ -119,7 +233,7 @@ def get_batch_offsets(T: torch.Tensor):
     return batch_starts, batch_ends
 
 
-def flatten_adj(adj: torch.Tensor, T: torch.Tensor, taus: torch.Tensor, B: int):
+def flatten_adj(adj, T, taus, B):
     """Flatten a torch.coo_sparse [B, MAX_NODES, MAX_NODES] to [2, NE] and
     adds offsets to avoid collisions.
     This readies a sparse tensor for torch_geometric GNN
@@ -168,7 +282,6 @@ def _pack_hidden(
 	adj: torch.Tensor,
 	T: torch.Tensor,
 	B: int,
-        # Max edges per-batch
 	max_edges: int,
 	edge_fill: int = -1,
 	weight_fill: float = 1.0,
@@ -181,13 +294,7 @@ def _pack_hidden(
     # TODO can we vectorize this without a BxNE matrix?
     for b in range(B):
         sparse_b_idx = torch.nonzero(batch_idx == b).reshape(-1)
-        # No edges in batch
-        if sparse_b_idx.numel() == 0:
-            continue
-        assert sparse_b_idx.numel() < max_edges, (
-            f"Too many edges to pack ({sparse_b_idx.max()}), consider increasing max_edges ({max_edges})"
-        )
-        dense_b_idx = torch.arange(sparse_b_idx.numel())
+        dense_b_idx = torch.arange(sparse_b_idx.shape[0])
         dense_edges[b, :, dense_b_idx] = adj._indices()[1:, sparse_b_idx]
         dense_weights[b, 0, dense_b_idx] = adj._values()[sparse_b_idx]
 
@@ -201,7 +308,7 @@ def _unpack_hidden(
     edges: torch.Tensor,
     weights: torch.Tensor,
     T: torch.Tensor,
-    B: int
+    B: torch.Tensor
 ):
     """Convert a ray dense edgelist into a torch.coo_sparse tensor"""
     # Get indices of valid edge pairs
@@ -212,9 +319,12 @@ def _unpack_hidden(
 
     adj_idx = torch.stack([batch_idx, sources, sinks])
     weights_filtered = weights[batch_idx, 0, edge_idx]
+    #sink_idx = edges[batch_idx, 1, source_idx]
+    #adj_idx = torch.stack([batch_idx, source_idx, sink_idx])
+
 
     adj = torch.sparse_coo_tensor(
-        indices=adj_idx.long(), values=weights_filtered, size=[B, nodes.shape[1], nodes.shape[1]]
+        indices=adj_idx, values=weights_filtered, size=(B, nodes.shape[1], nodes.shape[1])
     )
 
     return nodes, adj, T

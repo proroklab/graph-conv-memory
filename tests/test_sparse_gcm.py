@@ -754,6 +754,26 @@ class TestLearnedEdge(unittest.TestCase):
 
 
 
+class TestUtil(unittest.TestCase):
+    def test_flatten_idx(self):
+        idx = torch.tensor([
+            [0, 0, 0, 0, 1],
+            [0, 0, 0, 1, 0],
+            [0, 0, 1, 0, 0],
+            [0, 1, 0, 0, 0]
+        ])
+        flat, offsets = util.flatten_idx_n_dim(idx)
+
+    def test_flatten_many(self):
+        idx = torch.tensor([
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 1, 1, 1, 1],
+            [0, 1, 2, 3, 0, 1, 2, 3]
+        ])
+        flat, offsets = util.flatten_idx_n_dim(idx)
+        if flat.unique().shape != flat.shape:
+            self.fail(f"Repeated elems {flat}")
+
 
 
 if __name__ == "__main__":

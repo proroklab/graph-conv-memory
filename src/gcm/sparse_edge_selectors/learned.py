@@ -117,6 +117,34 @@ class LearnedEdge(torch.nn.Module):
         logits = self.edge_network(network_input).squeeze()
         # TODO rather than sparse to dense conversion, implement
         # a sparse gumbel softmax
+        sparse_gs = True
+        if sparse_gs:
+            stacked_idx = torch.cat((
+                torch.arange(self.num_edge_samples
+                    ).repeat_interleave(edge_idx.shape[-1]).unsqueeze(0),
+                edge_idx.repeat(1, self.num_edge_samples)
+            ), dim=0)
+            gs_input = torch.sparse_coo_tensor(
+                stacked_idx,
+                logits.repeat(self.num_edge_samples), 
+                size=(self.num_edge_samples, B, nodes.shape[1], nodes.shape[1])
+            )
+            soft = util.sparse_gumbel_softmax(gs_input, dim=3, hard=True)
+            # Sum out sample dim using coalesce
+            soft_coalesced = torch.sparse_coo_tensor(
+                indices=soft._indices()[1:],
+                values=soft._values(),
+                size=(B, nodes.shape[1], nodes.shape[1])
+            ).coalesce()
+            # Run STE on values after sum
+            adj = torch.sparse_coo_tensor(
+                indices=soft_coalesced._indices(),
+                values=self.ste(soft_coalesced._values()),
+                size=(B, nodes.shape[1], nodes.shape[1])
+            )
+            return adj
+
+
         # TODO: This will be a dense NxN matrix at some point
         # we should offset max() - min()
         # MAKE SURE TO RETRANSFORM INDICES BELOW
@@ -133,8 +161,8 @@ class LearnedEdge(torch.nn.Module):
         # and selecting an entry with 1e-38 prob
         gs_input = gs_input.repeat(self.num_edge_samples, 1, 1, 1)
         soft = torch.nn.functional.gumbel_softmax(gs_input, hard=True, dim=3)
-        # Clamp adj to 1
         edges = self.ste(soft.sum(dim=0))
+        # Clamp adj to 1
         # Only extract valid edges
         # as we min-padded the gs_input matrix to make it dense.
         # Rows < T should be all zero (not have any incoming edges)
