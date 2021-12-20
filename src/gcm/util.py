@@ -347,11 +347,14 @@ def flatten_nodes(nodes: torch.Tensor, T: torch.Tensor, taus: torch.Tensor, B: i
     # return these too
     # Flat nodes are ordered B,:T+tau (all valid nodes)
     # We want B,T:T+tau (new nodes), which is batch_offsets:batch_offsets + tau
+    offset_starts = batch_offsets + T
+    offset_ends = offset_starts + taus
+
     output_node_idxs = torch.cat(
         [
             torch.arange(
-                batch_offsets[b] + T[b],
-                batch_offsets[b] + T[b] + taus[b],
+                offset_starts[b],
+                offset_ends[b],
                 device=nodes.device,
             )
             for b in range(B)

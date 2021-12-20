@@ -107,7 +107,9 @@ class LearnedEdge(torch.nn.Module):
             edge = edge[:, edge[0] >= T[b]]
 
 
-            batch = b * torch.ones(edge[-1].shape[-1], device=nodes.device, dtype=torch.long)
+            batch = b * torch.ones(
+                edge[-1].shape[-1], device=nodes.device, dtype=torch.long
+            )
             edge_idx.append(torch.cat((batch.unsqueeze(0), edge), dim=0))
 
 
