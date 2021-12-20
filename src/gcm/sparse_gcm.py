@@ -156,7 +156,9 @@ class SparseGCM(torch.nn.Module):
         edges = torch.flip(edges, (0,))
         assert torch.all(edges[0] < edges[1]), "Causality violated"
         if edges.numel() > 0:
-            edges, weights = torch_geometric.utils.coalesce(edges, weights)
+            edges, weights = torch_geometric.utils.coalesce(
+                edges, weights, reduce="mean"
+            )
         if self.max_hops is None:
             # Convolve over entire graph
             node_feats = self.gnn(flat_nodes, edges, weights)
