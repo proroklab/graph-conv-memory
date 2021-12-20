@@ -40,12 +40,16 @@ class LearnedEdge(torch.nn.Module):
         self.ste = util.StraightThroughEstimator()
         self.window = window
 
+    def init_weights(m):
+        if isinstance(m, torch.nn.Linear): 
+            torch.nn.init.orthogonal_(m.weight)
+
     def build_edge_network(self, input_size: int) -> torch.nn.Sequential:
         """Builds a network to predict edges.
         Network input: (i || j)
         Network output: logits(edge(i,j))
         """
-        return torch.nn.Sequential(
+        m = torch.nn.Sequential(
             torch.nn.Linear(2 * input_size, input_size),
             torch.nn.ReLU(),
             torch.nn.LayerNorm(input_size),
@@ -54,6 +58,8 @@ class LearnedEdge(torch.nn.Module):
             torch.nn.LayerNorm(input_size),
             torch.nn.Linear(input_size, 1),
         )
+        m.apply(init_weights)
+        return m
 
     @typechecked
     def forward(
