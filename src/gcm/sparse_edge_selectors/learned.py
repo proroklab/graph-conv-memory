@@ -88,10 +88,11 @@ class LearnedEdge(torch.nn.Module):
         # Construct indices denoting all edges, which we sample from
         # Note that we only want to sample incoming edges from nodes T to T + tau
         edge_idx = []
+        tril_inputs = T + taus
         for b in range(B):
             # Use windows to reduce size, in case the graph is too big
             edge = torch.tril_indices(
-                T[b] + taus[b], T[b] + taus[b], offset=-1, 
+                tril_inputs[b], tril_inputs[b], offset=-1, 
                 dtype=torch.long,
                 device=nodes.device,
             )
