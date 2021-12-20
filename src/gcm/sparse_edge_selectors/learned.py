@@ -40,7 +40,7 @@ class LearnedEdge(torch.nn.Module):
         self.ste = util.StraightThroughEstimator()
         self.window = window
 
-    def init_weights(m):
+    def init_weights(self, m):
         if isinstance(m, torch.nn.Linear): 
             torch.nn.init.orthogonal_(m.weight)
 
@@ -58,7 +58,7 @@ class LearnedEdge(torch.nn.Module):
             torch.nn.LayerNorm(input_size),
             torch.nn.Linear(input_size, 1),
         )
-        m.apply(init_weights)
+        m.apply(self.init_weights)
         return m
 
     @typechecked
@@ -90,18 +90,18 @@ class LearnedEdge(torch.nn.Module):
         edge_idx = []
         for b in range(B):
             # Use windows to reduce size, in case the graph is too big
-            if self.window is not None:
-                window_min_idx = max(0, T[b] - self.window)
-            else:
-                window_min_idx = 0
             edge = torch.tril_indices(
                 T[b] + taus[b], T[b] + taus[b], offset=-1, 
                 dtype=torch.long,
                 device=nodes.device,
             )
-            window_mask = edge[1] >= window_min_idx
-            # Remove edges outside of window
-            edge = edge[:, window_mask]
+            # Remove entries outside of the window
+            if self.window is not None:
+                window_min_idx = max(0, T[b] - self.window)
+                window_mask = edge[1] >= window_min_idx
+                # Remove edges outside of window
+                edge = edge[:, window_mask]
+
             # Filter edges -- we only want incoming edges to tau nodes
             # we should have no sinks < T
             edge = edge[:, edge[0] >= T[b]]
