@@ -32,11 +32,11 @@ class RaySparseGCM(TorchModelV2, nn.Module):
         # Note that input will be reshaped by a linear layer
         # to gnn_input_size
         "gnn": torch_geometric.nn.Sequential(
-            "x, edge_index, weights, B, N",
+            "x, edge_index, weights",
             [
-                (torch_geometric.nn.GraphConv(64, 64), "x, edge_index -> x"),
+                (torch_geometric.nn.GraphConv(64, 64), "x, edge_index, weights -> x"),
                 torch.nn.Tanh(),
-                (torch_geometric.nn.GraphConv(64, 64), "x, edge_index -> x"),
+                (torch_geometric.nn.GraphConv(64, 64), "x, edge_index, weights -> x"),
                 torch.nn.Tanh(),
             ],
         ),
@@ -206,7 +206,7 @@ class RaySparseGCM(TorchModelV2, nn.Module):
         # Push thru pre-gcm layers
         out, hidden = self.gcm(dense, taus, hidden)
 
-        logits = self.logit_branch(out).reshape(B * t, self.act_dim)
+        logits = self.logit_branch(out).reshape(B * t, self.num_outputs)
         self.cur_val = self.value_branch(out).reshape(B * t)
 
         packed_state = util.pack_hidden(hidden, B, self.cfg["max_edges"])

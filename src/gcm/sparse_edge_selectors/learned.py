@@ -26,7 +26,9 @@ class LearnedEdge(torch.nn.Module):
         # Only consider edges to vertices in a fixed-size window
         # this reduces memory usage but prohibits edges to nodes outside
         # the window. Use None for no window (all possible edges)
-        window: Union[int, None] = None
+        window: Union[int, None] = None,
+        # Stores useful information in instance variables
+        log_stats: bool = True
     ):
         super().__init__()
         assert model or input_size, "Must specify either input_size or model"
@@ -39,6 +41,8 @@ class LearnedEdge(torch.nn.Module):
             self.sm = util.Spardmax()
         self.ste = util.StraightThroughEstimator()
         self.window = window
+        self.log_stats = log_stats
+        self.stats = {}
 
     def init_weights(self, m):
         if isinstance(m, torch.nn.Linear): 
@@ -151,6 +155,15 @@ class LearnedEdge(torch.nn.Module):
                 values=self.ste(soft_coalesced._values()),
                 size=(B, nodes.shape[1], nodes.shape[1])
             )
+            if self.log_stats and self.training:
+                self.stats["edges_per_node"] = (
+                    adj._values().numel() / gs_input._values().numel()
+                )
+                self.stats["edge_util"] = (
+                    self.stats["edges_per_node"] / self.num_edge_samples
+                )
+                self.stats["logits_mean"] = logits.detach().mean().item()
+                self.stats["logits_var"] = logits.detach().var().item()
             return adj
 
 
