@@ -146,6 +146,17 @@ class SparseGCM(torch.nn.Module):
             new_val = torch.cat([adj._values(), new_adj._values()], dim=-1)
             adj = torch.sparse_coo_tensor(indices=new_idx, values=new_val, size=adj.shape)
 
+        # Remove duplicates from edge selectors
+        if adj._values().numel() > 1:
+            adj_idx, adj_val = torch_geometric.utils.coalesce(
+                adj._indices(), adj._values(), reduce="mean"
+            )
+            adj = torch.sparse_coo_tensor(
+                indices=adj_idx,
+                values=adj_val,
+                size=adj.shape,
+                device=adj.device
+            )
         # Convert to GNN input format
         flat_nodes, output_node_idxs = util.flatten_nodes(dirty_nodes, T, taus, B)
         edges, weights, edge_batch = util.flatten_adj(adj, T, taus, B)
@@ -194,12 +205,5 @@ class SparseGCM(torch.nn.Module):
         mx_dense[dense_B_idxs, dense_tau_idxs] = mx
 
         T = T + taus
-        # TODO: this probably fucks up gradients, do something about it
-        adj = torch.sparse_coo_tensor(
-            indices=adj._indices(),
-            values=self.ste(adj._values()),
-            size=adj.shape,
-            device=adj.device
-        )
 
         return mx_dense, (nodes, adj, T)
