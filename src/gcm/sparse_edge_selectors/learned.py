@@ -155,11 +155,8 @@ class LearnedEdge(torch.nn.Module):
             )
             if self.log_stats and self.training:
                 self.stats["edges_per_node"] = (
-                    adj._values().numel() / gs_input._values().numel()
-                )
-                self.stats["edge_util"] = (
-                    self.stats["edges_per_node"] / self.num_edge_samples
-                )
+                    adj._values().numel() / taus.sum().detach()
+                ).item()
                 self.stats["logits_mean"] = logits.detach().mean().item()
                 self.stats["logits_var"] = logits.detach().var().item()
             return adj
