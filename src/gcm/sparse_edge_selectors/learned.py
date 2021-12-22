@@ -150,9 +150,10 @@ class LearnedEdge(torch.nn.Module):
             # Run STE on values after sum
             adj = torch.sparse_coo_tensor(
                 indices=soft_coalesced._indices(),
-                values=self.ste(soft_coalesced._values()),
+                values=soft_coalesced._values() / soft_coalesced._values().detach(),
                 size=(B, nodes.shape[1], nodes.shape[1])
             )
+
             if self.log_stats and self.training:
                 self.stats["edges_per_node"] = (
                     adj._values().numel() / taus.sum().detach()
