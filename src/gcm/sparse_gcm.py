@@ -129,10 +129,11 @@ class SparseGCM(torch.nn.Module):
             new_adj = self.edge_selectors(dirty_nodes, T, taus, B)
             new_idx = torch.cat([adj._indices(), new_adj._indices()], dim=-1) 
             new_val = torch.cat([adj._values(), new_adj._values()], dim=-1)
-            adj = torch.sparse_coo_tensor(indices=new_idx, values=new_val, size=adj.shape)
-            # Flatten then unflatten coalesces using mean, so adj.max() == 1
-            #fe, fw, bi = util.flatten_adj(adj, T, taus, B) 
-            #adj = util.unflatten_adj(fe, fw, bi, T, taus, B, self.graph_size)
+            adj = torch.sparse_coo_tensor(
+                indices=new_idx, 
+                values=new_val, 
+                size=adj.shape
+            )
 
 
         # Thru network
@@ -147,21 +148,17 @@ class SparseGCM(torch.nn.Module):
             adj = torch.sparse_coo_tensor(indices=new_idx, values=new_val, size=adj.shape)
 
         # Remove duplicates from edge selectors
-        if adj._values().numel() > 1:
-            adj_idx, adj_val = torch_geometric.utils.coalesce(
-                adj._indices(), adj._values(), reduce="mean"
-            )
-            adj = torch.sparse_coo_tensor(
-                indices=adj_idx,
-                values=adj_val,
-                size=adj.shape,
-                device=adj.device
-            )
+        # and set all weights to 1.0
+        # for some reason, torch_geometric coalesces incorrectly here
+        adj = adj.coalesce()
+        adj = torch.sparse_coo_tensor(
+            indices=adj.indices(),
+            values=adj.values() / adj.values(),
+            size=adj.shape
+        )
         # Convert to GNN input format
         flat_nodes, output_node_idxs = util.flatten_nodes(dirty_nodes, T, taus, B)
         edges, weights, edge_batch = util.flatten_adj(adj, T, taus, B)
-        # Flatten/unflatten coalesces adj, make sure the adj we return is coalesced
-        # adj = util.unflatten_adj(edges, weights, edge_batch, T, taus, B, nodes.shape[1])
         # Our adj matrix is sink -> source, but torch_geometric
         # expects edgelist as source -> sink, so flip
         edges = torch.flip(edges, (0,))

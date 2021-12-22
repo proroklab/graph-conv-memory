@@ -212,12 +212,6 @@ def flatten_adj(adj, T, taus, B):
     flat_edges = adj._indices()[1:] + edge_offsets
     flat_weights = adj._values()
 
-    if flat_edges.numel() > 0:
-        # Make sure idxs are removed alongside edges and weights
-        flat_edges, [flat_weights, batch_idx] = torch_geometric.utils.coalesce(
-            flat_edges, [flat_weights, batch_idx], reduce="mean"
-        )
-
     return flat_edges, flat_weights, batch_idx
     
 
