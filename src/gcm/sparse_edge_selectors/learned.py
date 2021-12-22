@@ -85,8 +85,6 @@ class LearnedEdge(torch.nn.Module):
         if list(self.edge_network.parameters())[0].device != nodes.device:
             self.edge_network = self.edge_network.to(nodes.device)
 
-        # TODO: use window
-
         # Do for all batches at once
         #
         # Construct indices denoting all edges, which we sample from
@@ -94,13 +92,13 @@ class LearnedEdge(torch.nn.Module):
         edge_idx = []
         tril_inputs = T + taus
         for b in range(B):
-            # Use windows to reduce size, in case the graph is too big
             edge = torch.tril_indices(
                 tril_inputs[b], tril_inputs[b], offset=-1, 
                 dtype=torch.long,
                 device=nodes.device,
             )
-            # Remove entries outside of the window
+            # Use windows to reduce size, in case the graph is too big.
+            # Remove indices outside of the window
             if self.window is not None:
                 window_min_idx = max(0, T[b] - self.window)
                 window_mask = edge[1] >= window_min_idx
@@ -112,9 +110,9 @@ class LearnedEdge(torch.nn.Module):
             edge = edge[:, edge[0] >= T[b]]
 
 
-            batch = b * torch.ones(
-                edge[-1].shape[-1], device=nodes.device, dtype=torch.long
-            )
+            batch = b * torch.ones(1, device=nodes.device, dtype=torch.long)
+            batch = batch.expand(edge[-1].shape[-1])
+            
             edge_idx.append(torch.cat((batch.unsqueeze(0), edge), dim=0))
 
 
