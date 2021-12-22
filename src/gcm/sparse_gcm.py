@@ -148,12 +148,13 @@ class SparseGCM(torch.nn.Module):
             adj = torch.sparse_coo_tensor(indices=new_idx, values=new_val, size=adj.shape)
 
         # Remove duplicates from edge selectors
-        # and set all weights to 1.0
-        # for some reason, torch_geometric coalesces incorrectly here
+        # and set all weights to 1.0 without cancelling out gradients
+        # from logits.
+        # For some reason, torch_geometric coalesces incorrectly here
         adj = adj.coalesce()
         adj = torch.sparse_coo_tensor(
             indices=adj.indices(),
-            values=adj.values() / adj.values(),
+            values=adj.values() / adj.values().detach(),
             size=adj.shape
         )
         # Convert to GNN input format
