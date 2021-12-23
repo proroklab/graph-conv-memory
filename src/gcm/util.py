@@ -209,11 +209,12 @@ def flatten_adj(adj, T, taus, B):
     """
     batch_starts, batch_ends = get_batch_offsets(T + taus)
 
-
-    batch_idx = adj._indices()[0]
+    # TODO remove coalesce when bug is fixed
+    adj = adj.coalesce()
+    batch_idx = adj.indices()[0]
     edge_offsets = batch_starts[batch_idx]
-    flat_edges = adj._indices()[1:] + edge_offsets
-    flat_weights = adj._values()
+    flat_edges = adj.indices()[1:] + edge_offsets
+    flat_weights = adj.values()
 
     return flat_edges, flat_weights, batch_idx
     
@@ -251,6 +252,8 @@ def _pack_hidden(
     dense_edges = torch.empty((B, 2, max_edges), device=adj.device, dtype=torch.long).fill_(edge_fill)
     dense_weights = torch.empty((B, 1, max_edges), device=adj.device, dtype=torch.float).fill_(weight_fill)
 
+    # TODO remove coalesce when bug is fixed
+    adj = adj.coalesce()
     # TODO can we vectorize this without a BxNE matrix?
     for b in range(B):
         sparse_b_idx = torch.nonzero(batch_idx == b).reshape(-1)
@@ -259,8 +262,8 @@ def _pack_hidden(
             " max edges"
         )
         dense_b_idx = torch.arange(sparse_b_idx.shape[0])
-        dense_edges[b, :, dense_b_idx] = adj._indices()[1:, sparse_b_idx]
-        dense_weights[b, 0, dense_b_idx] = adj._values()[sparse_b_idx]
+        dense_edges[b, :, dense_b_idx] = adj.indices()[1:, sparse_b_idx]
+        dense_weights[b, 0, dense_b_idx] = adj.values()[sparse_b_idx]
 
     return nodes, dense_edges, dense_weights, T
 
