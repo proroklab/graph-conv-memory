@@ -2,6 +2,7 @@ import unittest
 import torch
 import torch_geometric
 from collections import OrderedDict
+import gym
 
 from gcm.gcm import DenseGCM
 from gcm.edge_selectors.temporal import TemporalBackedge
@@ -10,6 +11,7 @@ from gcm.edge_selectors.learned import LearnedEdge as DLearnedEdge
 from gcm.sparse_edge_selectors.learned import LearnedEdge as SLearnedEdge
 from gcm import util
 from gcm.sparse_gcm import SparseGCM
+from gcm import ray_sparse_gcm
 
 
 class TestFlattenAdj(unittest.TestCase):
@@ -882,6 +884,42 @@ class TestE2E(unittest.TestCase):
         tmp = util.unpack_hidden(tmp, B)
         out.mean().backward()
         self.assertTrue(canary.grad is not None)
+
+    def test_ray_sparse_edge_grad(self):
+        B = 1
+        F = 64
+        num_obs = 32
+        graph_size = 32
+        taus = num_obs * torch.ones(B)
+        act_space = gym.spaces.Discrete(1)
+        obs_space = gym.spaces.Box(high=1000, low=-1000, shape=(F,))
+        cfg = ray_sparse_gcm.RaySparseGCM.DEFAULT_CONFIG
+        cfg["aux_edge_selectors"] = SLearnedEdge(F)
+        ray_gcm = ray_sparse_gcm.RaySparseGCM(
+            obs_space,
+            act_space,
+            1,
+            cfg, 
+            'my_model',
+        )
+
+        canary = torch.tensor([1.0], requires_grad=True)
+        input_dict = {
+            "obs_flat": torch.ones(B*num_obs, F) * canary
+        }
+        state = [
+            torch.zeros(B, graph_size, F),
+            torch.ones(B, 2, 50).long(),
+            torch.ones(B, 1, 50),
+            torch.zeros(B).long()
+        ]
+        seq_lens = taus.int().numpy()
+        output, hidden = ray_gcm.forward(input_dict, state, seq_lens)
+        # Check grads for adj
+        hidden[2].sum().backward()
+        self.assertTrue(hidden[2].requires_grad)
+        self.assertTrue(canary.grad is not None)
+
 
 
 
