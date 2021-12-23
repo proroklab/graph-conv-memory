@@ -47,6 +47,10 @@ class LearnedEdge(torch.nn.Module):
 
     def grad_hook(self, p_name, grad):
         self.stats[f"gnorm_{p_name}"] = grad.norm().detach().item()
+        import pdb; pdb.set_trace()
+
+    def test(self, grad):
+        import pdb; pdb.set_trace()
 
     def init_weights(self, m):
         if isinstance(m, torch.nn.Linear): 
@@ -68,7 +72,8 @@ class LearnedEdge(torch.nn.Module):
         )
         m.apply(self.init_weights)
         for n, p in m.named_parameters():
-            p.register_hook(functools.partial(self.grad_hook, n)) 
+            #p.register_hook(functools.partial(self.grad_hook, n)) 
+            p.register_hook(self.test)
         return m
 
     @typechecked
@@ -135,7 +140,25 @@ class LearnedEdge(torch.nn.Module):
         # TODO rather than sparse to dense conversion, implement
         # a sparse gumbel softmax
         sparse_gs = True
-        if sparse_gs:
+        fast_gs = True
+        if fast_gs:
+            cutoff = 1 / (1 + self.num_edge_samples)
+            gs_input = torch.sparse_coo_tensor(
+                indices=edge_idx,
+                values=logits,
+                size=(B, nodes.shape[1], nodes.shape[1])
+            )
+            soft = util.sparse_gumbel_softmax(gs_input, dim=2, hard=False)
+            activation_mask = soft._values() > cutoff
+            adj = torch.sparse_coo_tensor(
+                indices=soft._indices()[:,activation_mask],
+                values=soft._values()[activation_mask],
+                size=(B, nodes.shape[1], nodes.shape[1])
+            )
+
+
+
+        elif sparse_gs:
             stacked_idx = torch.cat((
                 torch.arange(self.num_edge_samples, device=logits.device,
                     ).repeat_interleave(edge_idx.shape[-1]).unsqueeze(0),
@@ -160,15 +183,15 @@ class LearnedEdge(torch.nn.Module):
                 size=(B, nodes.shape[1], nodes.shape[1])
             )
 
-            if self.training:
-                self.var = logits.var()
-            if self.log_stats and self.training:
-                self.stats["edges_per_node"] = (
-                    adj._values().numel() / taus.sum().detach()
-                ).item()
-                self.stats["logits_mean"] = logits.detach().mean().item()
-                self.stats["logits_var"] = logits.detach().var().item()
-            return adj
+        if self.training:
+            self.var = logits.var()
+        if self.log_stats and self.training:
+            self.stats["edges_per_node"] = (
+                adj._values().numel() / taus.sum().detach()
+            ).item()
+            self.stats["logits_mean"] = logits.detach().mean().item()
+            self.stats["logits_var"] = logits.detach().var().item()
+        return adj
 
 
         # TODO: This will be a dense NxN matrix at some point
