@@ -142,7 +142,7 @@ class LearnedEdge(torch.nn.Module):
             soft = util.sparse_gumbel_softmax(
                 gs_input, dim=2, hard=False, tau=1.#self.tau_param.abs()
             )
-            activation_mask = soft._values() > cutoff
+            activation_mask = soft.values() > cutoff
             adj = torch.sparse_coo_tensor(
                 indices=soft.indices()[:,activation_mask],
                 values=(
@@ -152,9 +152,8 @@ class LearnedEdge(torch.nn.Module):
                 size=(B, nodes.shape[1], nodes.shape[1])
             )
 
-        if self.training:
-            self.var = logits.var()
         if self.log_stats and self.training:
+            # CAREFUL _values() detaches from autograd graph and breaks grads
             self.stats["edges_per_node"] = (
                 adj._values().numel() / taus.sum().detach()
             ).item()
