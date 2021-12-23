@@ -251,6 +251,10 @@ def _pack_hidden(
     # TODO can we vectorize this without a BxNE matrix?
     for b in range(B):
         sparse_b_idx = torch.nonzero(batch_idx == b).reshape(-1)
+        assert sparse_b_idx.shape[-1] < max_edges, (
+            f"Cannot pack {sparse_b_idx.shape[-1]} edges into {max_edges}, increase"
+            " max edges"
+        )
         dense_b_idx = torch.arange(sparse_b_idx.shape[0])
         dense_edges[b, :, dense_b_idx] = adj._indices()[1:, sparse_b_idx]
         dense_weights[b, 0, dense_b_idx] = adj._values()[sparse_b_idx]
