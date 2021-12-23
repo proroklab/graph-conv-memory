@@ -44,6 +44,7 @@ class LearnedEdge(torch.nn.Module):
         self.window = window
         self.log_stats = log_stats
         self.stats = {}
+        self.tau_param = torch.nn.Parameter(torch.tensor([1.]))
 
     def grad_hook(self, p_name, grad):
         self.stats[f"gnorm_{p_name}"] = grad.norm().detach().item()
@@ -93,8 +94,8 @@ class LearnedEdge(torch.nn.Module):
                 size=(B, nodes.shape[1], nodes.shape[1])
             )
                 
-        if list(self.edge_network.parameters())[0].device != nodes.device:
-            self.edge_network = self.edge_network.to(nodes.device)
+        if list(self.parameters())[0].device != nodes.device:
+            self = self.to(nodes.device)
 
         # Do for all batches at once
         #
@@ -148,16 +149,18 @@ class LearnedEdge(torch.nn.Module):
                 values=logits,
                 size=(B, nodes.shape[1], nodes.shape[1])
             )
-            soft = util.sparse_gumbel_softmax(gs_input, dim=2, hard=False)
+            soft = util.sparse_gumbel_softmax(
+                gs_input, dim=2, hard=False, tau=self.tau_param.abs()
+            )
             activation_mask = soft._values() > cutoff
             adj = torch.sparse_coo_tensor(
                 indices=soft._indices()[:,activation_mask],
-                values=soft._values()[activation_mask],
+                values=(
+                    soft._values()[activation_mask] 
+                    / soft._values()[activation_mask].detach()
+                ),
                 size=(B, nodes.shape[1], nodes.shape[1])
             )
-
-
-
         elif sparse_gs:
             stacked_idx = torch.cat((
                 torch.arange(self.num_edge_samples, device=logits.device,
@@ -189,8 +192,10 @@ class LearnedEdge(torch.nn.Module):
             self.stats["edges_per_node"] = (
                 adj._values().numel() / taus.sum().detach()
             ).item()
+            self.stats["edge_density"] = adj._values().numel() / edge_idx[0].numel()
             self.stats["logits_mean"] = logits.detach().mean().item()
             self.stats["logits_var"] = logits.detach().var().item()
+            self.stats["temperature"] = self.tau_param.detach().item()
         return adj
 
 
