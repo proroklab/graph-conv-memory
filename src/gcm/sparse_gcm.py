@@ -103,6 +103,8 @@ class SparseGCM(torch.nn.Module):
             hidden = self.get_initial_hidden_state(x)
 
         nodes, adj, T = hidden
+        # TODO remove coalesce when bug is fixed
+        adj = adj.coalesce()
 
         N = nodes.shape[1]
         B = x.shape[0]
@@ -126,14 +128,15 @@ class SparseGCM(torch.nn.Module):
         dirty_nodes = nodes.clone()
 
         if self.edge_selectors:
-            new_adj = self.edge_selectors(dirty_nodes, T, taus, B)
-            new_idx = torch.cat([adj._indices(), new_adj._indices()], dim=-1) 
-            new_val = torch.cat([adj._values(), new_adj._values()], dim=-1)
+            # TODO remove coalesce when bug is fixed
+            new_adj = self.edge_selectors(dirty_nodes, T, taus, B).coalesce()
+            new_idx = torch.cat([adj.indices(), new_adj.indices()], dim=-1) 
+            new_val = torch.cat([adj.values(), new_adj.values()], dim=-1)
             adj = torch.sparse_coo_tensor(
                 indices=new_idx, 
                 values=new_val, 
                 size=adj.shape
-            )
+            ).coalesce()
 
 
         # Thru network
@@ -142,16 +145,18 @@ class SparseGCM(torch.nn.Module):
         if self.positional_encoder:
             dirty_nodes = self.positional_encoder(dirty_nodes, T + taus)
         if self.aux_edge_selectors:
-            new_adj = self.aux_edge_selectors(dirty_nodes, T, taus, B)
-            new_idx = torch.cat([adj._indices(), new_adj._indices()], dim=-1) 
-            new_val = torch.cat([adj._values(), new_adj._values()], dim=-1)
-            adj = torch.sparse_coo_tensor(indices=new_idx, values=new_val, size=adj.shape)
+            # TODO remove coalesce when bug is fixed
+            new_adj = self.aux_edge_selectors(dirty_nodes, T, taus, B).coalesce()
+            new_idx = torch.cat([adj.indices(), new_adj.indices()], dim=-1) 
+            new_val = torch.cat([adj.values(), new_adj.values()], dim=-1)
+            adj = torch.sparse_coo_tensor(indices=new_idx, values=new_val, size=adj.shape).coalesce()
 
         # Remove duplicates from edge selectors
         # and set all weights to 1.0 without cancelling out gradients
         # from logits.
         # For some reason, torch_geometric coalesces incorrectly here
-        adj = adj.coalesce()
+        # TODO: remove comment when coalesce bug is fixed
+        # adj = adj.coalesce()
         adj = torch.sparse_coo_tensor(
             indices=adj.indices(),
             values=adj.values() / adj.values().detach(),

@@ -752,6 +752,21 @@ class TestLearnedEdge(unittest.TestCase):
         if not torch.all(hidden[1].coalesce().indices() == desired):
             self.fail(f"{hidden[1].coalesce().indices()} != {desired}")
 
+    def test_grad(self):
+        B = 2
+        gsize = 4
+        taus = gsize * torch.ones(B, dtype=torch.long)
+        T = torch.zeros(B, dtype=torch.long)
+        obs = torch.zeros(B, gsize, self.F)
+        canary = torch.tensor([1.0], requires_grad=True)
+        obs = obs * canary
+
+
+        sel = SLearnedEdge(input_size=self.F, num_edge_samples=10, window=16)
+        adj = sel(obs, T, taus, B)
+        adj.coalesce().values().sum().backward()
+        self.assertTrue(canary.grad is not None)
+
 
 
 class TestUtil(unittest.TestCase):
@@ -851,7 +866,8 @@ class TestE2E(unittest.TestCase):
             sparse_g, graph_size=num_obs, edge_selectors=SLearnedEdge(obs_size),
             max_hops=2
         )
-        obs = torch.rand(B, num_obs, obs_size, requires_grad=True)
+        canary = torch.tensor([1.0], requires_grad=True)
+        obs = torch.rand(B, num_obs, obs_size) * canary 
         taus = torch.ones(B, dtype=torch.long)
         hidden = None
         with torch.no_grad():
@@ -865,7 +881,8 @@ class TestE2E(unittest.TestCase):
         tmp = util.pack_hidden(hidden, B, max_edges = 5 * num_obs)
         tmp = util.unpack_hidden(tmp, B)
         out.mean().backward()
-        self.assertTrue(obs.grad is not None)
+        self.assertTrue(canary.grad is not None)
+
 
 
 if __name__ == "__main__":

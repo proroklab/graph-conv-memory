@@ -92,14 +92,17 @@ def sparse_gumbel_softmax(
     tau: float=1, 
     hard: bool=False,
     ) -> torch.sparse_coo:
-    gumbels = -torch.empty_like(logits._values()).exponential_().log()
-    gumbels = (logits._values() + gumbels) / tau
+    # TODO remove coalesce when bug is fixed
+    logits = logits.coalesce()
+    gumbels = -torch.empty_like(logits.values()).exponential_().log()
+    gumbels = (logits.values() + gumbels) / tau
     gumbels = torch.sparse_coo_tensor(
-        indices=logits._indices(),
-        values=logits._values(),
+        indices=logits.indices(),
+        values=gumbels,
         size=logits.shape
     )
-    y_soft = torch.sparse.softmax(gumbels, dim=dim)
+    # TODO remove coalesce when bug is fixed
+    y_soft = torch.sparse.softmax(gumbels, dim=dim).coalesce()
 
     if not hard:
         return y_soft
