@@ -1,4 +1,5 @@
 import torch
+import functools
 from typing import List, Any, Tuple, Union
 
 from torchtyping import TensorType, patch_typeguard  # type: ignore
@@ -44,6 +45,9 @@ class LearnedEdge(torch.nn.Module):
         self.log_stats = log_stats
         self.stats = {}
 
+    def grad_hook(self, p_name, grad):
+        self.stats[f"gnorm_{p_name}"] = grad.norm().detach().item()
+
     def init_weights(self, m):
         if isinstance(m, torch.nn.Linear): 
             torch.nn.init.orthogonal_(m.weight)
@@ -63,6 +67,8 @@ class LearnedEdge(torch.nn.Module):
             torch.nn.Linear(input_size, 1),
         )
         m.apply(self.init_weights)
+        for n, p in m.named_parameters():
+            p.register_hook(functools.partial(self.grad_hook, n)) 
         return m
 
     @typechecked
@@ -154,6 +160,8 @@ class LearnedEdge(torch.nn.Module):
                 size=(B, nodes.shape[1], nodes.shape[1])
             )
 
+            if self.training:
+                self.var = logits.var()
             if self.log_stats and self.training:
                 self.stats["edges_per_node"] = (
                     adj._values().numel() / taus.sum().detach()
