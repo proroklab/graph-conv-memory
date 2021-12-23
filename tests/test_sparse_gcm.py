@@ -727,7 +727,7 @@ class TestLearnedEdge(unittest.TestCase):
         taus = torch.ones(B, dtype=torch.long)
         T = torch.zeros(B)
         obs = torch.zeros(B, gsize, self.F)
-        sel = SLearnedEdge(input_size=0, model=DummyEdgenet(), num_edge_samples=1, window=2)
+        sel = SLearnedEdge(input_size=0, model=DummyEdgenet(), num_edge_samples=1, window=1)
         gcm = SparseGCM(
             self.sparse_g, graph_size=gsize, edge_selectors=sel
         )
@@ -833,6 +833,39 @@ class TestE2E(unittest.TestCase):
         tmp = util.pack_hidden(hidden, B, max_edges = 5 * num_obs)
         tmp = util.unpack_hidden(tmp, B)
         out.mean().backward()
+
+    def test_e2e_learned_edge_grad(self):
+        sparse_g = torch_geometric.nn.Sequential(
+            "x, edges, weights",
+            [
+                (torch_geometric.nn.GraphConv(32, 32), "x, edges, weights -> x"),
+                (torch.nn.Tanh()),
+                (torch_geometric.nn.GraphConv(32, 32), "x, edges, weights -> x"),
+                (torch.nn.Tanh()),
+            ],
+        )
+        B = 8
+        num_obs = 4
+        obs_size = 32
+        sparse_gcm = SparseGCM(
+            sparse_g, graph_size=num_obs, edge_selectors=SLearnedEdge(obs_size),
+            max_hops=2
+        )
+        obs = torch.rand(B, num_obs, obs_size, requires_grad=True)
+        taus = torch.ones(B, dtype=torch.long)
+        hidden = None
+        with torch.no_grad():
+            for i in range(num_obs):
+                out, hidden = sparse_gcm(obs[:,i,None], taus, hidden)
+                print(hidden[1]._values().numel())
+                tmp = util.pack_hidden(hidden, B, max_edges = 5 * num_obs)
+                tmp = util.unpack_hidden(tmp, B)
+        # train
+        out, hidden = sparse_gcm(obs, taus * num_obs, None)
+        tmp = util.pack_hidden(hidden, B, max_edges = 5 * num_obs)
+        tmp = util.unpack_hidden(tmp, B)
+        out.mean().backward()
+        self.assertTrue(obs.grad is not None)
 
 
 if __name__ == "__main__":
