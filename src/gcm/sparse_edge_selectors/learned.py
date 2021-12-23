@@ -46,13 +46,6 @@ class LearnedEdge(torch.nn.Module):
         self.stats = {}
         self.tau_param = torch.nn.Parameter(torch.tensor([1.]))
 
-    def grad_hook(self, p_name, grad):
-        self.stats[f"gnorm_{p_name}"] = grad.norm().detach().item()
-        import pdb; pdb.set_trace()
-
-    def test(self, grad):
-        import pdb; pdb.set_trace()
-
     def init_weights(self, m):
         if isinstance(m, torch.nn.Linear): 
             torch.nn.init.orthogonal_(m.weight)
@@ -72,9 +65,6 @@ class LearnedEdge(torch.nn.Module):
             torch.nn.Linear(input_size, 1),
         )
         m.apply(self.init_weights)
-        for n, p in m.named_parameters():
-            #p.register_hook(functools.partial(self.grad_hook, n)) 
-            p.register_hook(self.test)
         return m
 
     @typechecked
@@ -150,39 +140,15 @@ class LearnedEdge(torch.nn.Module):
                 size=(B, nodes.shape[1], nodes.shape[1])
             )
             soft = util.sparse_gumbel_softmax(
-                gs_input, dim=2, hard=False, tau=self.tau_param.abs()
+                gs_input, dim=2, hard=False, tau=1.#self.tau_param.abs()
             )
             activation_mask = soft._values() > cutoff
             adj = torch.sparse_coo_tensor(
-                indices=soft._indices()[:,activation_mask],
+                indices=soft.indices()[:,activation_mask],
                 values=(
-                    soft._values()[activation_mask] 
-                    / soft._values()[activation_mask].detach()
+                    soft.values()[activation_mask] 
+                    / soft.values()[activation_mask].detach()
                 ),
-                size=(B, nodes.shape[1], nodes.shape[1])
-            )
-        elif sparse_gs:
-            stacked_idx = torch.cat((
-                torch.arange(self.num_edge_samples, device=logits.device,
-                    ).repeat_interleave(edge_idx.shape[-1]).unsqueeze(0),
-                edge_idx.repeat(1, self.num_edge_samples)
-            ), dim=0)
-            gs_input = torch.sparse_coo_tensor(
-                stacked_idx,
-                logits.repeat_interleave(self.num_edge_samples), 
-                size=(self.num_edge_samples, B, nodes.shape[1], nodes.shape[1])
-            )
-            soft = util.sparse_gumbel_softmax(gs_input, dim=3, hard=True)
-            # Sum out sample dim using coalesce
-            soft_coalesced = torch.sparse_coo_tensor(
-                indices=soft._indices()[1:],
-                values=soft._values(),
-                size=(B, nodes.shape[1], nodes.shape[1])
-            ).coalesce()
-            # Run STE on values after sum
-            adj = torch.sparse_coo_tensor(
-                indices=soft_coalesced._indices(),
-                values=soft_coalesced._values() / soft_coalesced._values().detach(),
                 size=(B, nodes.shape[1], nodes.shape[1])
             )
 
@@ -197,45 +163,3 @@ class LearnedEdge(torch.nn.Module):
             self.stats["logits_var"] = logits.detach().var().item()
             self.stats["temperature"] = self.tau_param.detach().item()
         return adj
-
-
-        # TODO: This will be a dense NxN matrix at some point
-        # we should offset max() - min()
-        # MAKE SURE TO RETRANSFORM INDICES BELOW
-        gs_input = torch.empty(
-            (batch_idx.max() + 1, sink_idx.max() + 1, source_idx.max() + 1),
-            device=nodes.device, dtype=torch.float
-        ).fill_(torch.finfo(torch.float).min)
-        gs_input[batch_idx, sink_idx, source_idx] = logits
-        # Draw num_samples from gs distribution
-        # TODO mismatch between adj_idx and edge_idx
-        # e.g. 0,0,0 is not in edge_idx but is in adj_idx
-        #
-        # it is performing softmax even on rows of all zeros
-        # and selecting an entry with 1e-38 prob
-        gs_input = gs_input.repeat(self.num_edge_samples, 1, 1, 1)
-        soft = torch.nn.functional.gumbel_softmax(gs_input, hard=True, dim=3)
-        edges = self.ste(soft.sum(dim=0))
-        # Clamp adj to 1
-        # Only extract valid edges
-        # as we min-padded the gs_input matrix to make it dense.
-        # Rows < T should be all zero (not have any incoming edges)
-        # but gs will have made these rows nonzero
-        # so let's ignore the padded rows and only extract the valid sampled edges
-        valid_edges = edges[batch_idx, sink_idx, source_idx] 
-        # Of 
-        valid_edge_mask = valid_edges > 0
-
-        # Sampled edge indices
-        sampled_idx = edge_idx[:, valid_edge_mask]
-        # and the sampled results, to propagate grad thru adj_vals
-        sampled_vals = valid_edges[valid_edge_mask]
-
-
-        adj = torch.sparse_coo_tensor(
-            indices=sampled_idx,
-            values=sampled_vals,
-            size=(B, nodes.shape[1], nodes.shape[1])
-        )
-        return adj
-
