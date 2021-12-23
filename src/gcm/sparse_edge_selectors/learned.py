@@ -29,7 +29,17 @@ class LearnedEdge(torch.nn.Module):
         # the window. Use None for no window (all possible edges)
         window: Union[int, None] = None,
         # Stores useful information in instance variables
-        log_stats: bool = True
+        log_stats: bool = True,
+        # Default (initial) temperature for gumbel-softmax
+        softmax_temp: float = 1.0,
+        # Whether the temperature parameter for
+        # softmax/gumbel softmax should be learned
+        # or fixed
+        learn_softmax_temp: bool = True, 
+        # If learning the softmax temp,
+        # the lower and upper bounds for the temperature
+        # variable. Note that softmax is undefined for temp <= 0
+        temp_bounds: Tuple[float, float] = (0.001, 5)
     ):
         super().__init__()
         assert model or input_size, "Must specify either input_size or model"
@@ -44,7 +54,10 @@ class LearnedEdge(torch.nn.Module):
         self.window = window
         self.log_stats = log_stats
         self.stats = {}
-        self.tau_param = torch.nn.Parameter(torch.tensor([1.]))
+        self.tau_param = torch.tensor([softmax_temp])
+        self.temp_bounds = temp_bounds
+        if learn_softmax_temp:
+            self.tau_param = torch.nn.Parameter(self.tau_param)
 
     def init_weights(self, m):
         if isinstance(m, torch.nn.Linear): 
@@ -65,7 +78,7 @@ class LearnedEdge(torch.nn.Module):
             torch.nn.Linear(input_size, 1),
         )
         m.apply(self.init_weights)
-        return m
+        return torch.jit.script(m)
 
     @typechecked
     def forward(
@@ -139,8 +152,9 @@ class LearnedEdge(torch.nn.Module):
                 values=logits,
                 size=(B, nodes.shape[1], nodes.shape[1])
             )
+            self.tau_param.data.clamp_(*self.temp_bounds)
             soft = util.sparse_gumbel_softmax(
-                gs_input, dim=2, hard=False, tau=1.#self.tau_param.abs()
+                gs_input, dim=2, hard=False, tau=self.tau_param
             )
             activation_mask = soft.values() > cutoff
             adj = torch.sparse_coo_tensor(
