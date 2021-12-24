@@ -51,8 +51,6 @@ class LearnedEdge(torch.nn.Module):
         # This MUST be done here
         # if initialized in forward model does not learn...
         self.edge_network = self.build_edge_network(input_size) if model is None else model
-        if deterministic:
-            self.sm = util.Spardmax()
         self.ste = util.StraightThroughEstimator()
         self.window = window
         self.log_stats = log_stats
@@ -152,36 +150,38 @@ class LearnedEdge(torch.nn.Module):
         logits = self.edge_network(network_input).squeeze()
         # TODO rather than sparse to dense conversion, implement
         # a sparse gumbel softmax
-        sparse_gs = True
-        fast_gs = True
-        if fast_gs:
-            cutoff = 1 / (1 + self.num_edge_samples)
-            gs_input = torch.sparse_coo_tensor(
-                indices=edge_idx,
-                values=logits,
-                size=(B, nodes.shape[1], nodes.shape[1])
-            )
-            self.tau_param.data.clamp_(*self.temp_bounds)
+        cutoff = 1 / (1 + self.num_edge_samples)
+        gs_input = torch.sparse_coo_tensor(
+            indices=edge_idx,
+            values=logits,
+            size=(B, nodes.shape[1], nodes.shape[1])
+        )
+        self.tau_param.data.clamp_(*self.temp_bounds)
+        if not self.deterministic:
             soft = util.sparse_gumbel_softmax(
                 gs_input, dim=2, hard=False, tau=self.tau_param
             )
-            activation_mask = soft.values() > cutoff
-            adj = torch.sparse_coo_tensor(
-                indices=soft.indices()[:,activation_mask],
-                values=(
-                    soft.values()[activation_mask] 
-                    / soft.values()[activation_mask].detach()
-                ),
-                size=(B, nodes.shape[1], nodes.shape[1])
+        else:
+            soft = util.sparse_tempered_softmax(
+                gs_input, dim=2, hard=False, tau=self.tau_param
             )
 
-        if self.log_stats and self.training:
-            # CAREFUL _values() detaches from autograd graph and breaks grads
-            self.stats["edges_per_node"] = (
-                adj._values().numel() / taus.sum().detach()
-            ).item()
-            self.stats["edge_density"] = adj._values().numel() / edge_idx[0].numel()
-            self.stats["logits_mean"] = logits.detach().mean().item()
-            self.stats["logits_var"] = logits.detach().var().item()
-            self.stats["temperature"] = self.tau_param.detach().item()
+        activation_mask = soft.values() > cutoff
+        adj = torch.sparse_coo_tensor(
+            indices=soft.indices()[:,activation_mask],
+            values=(
+                soft.values()[activation_mask] 
+                / soft.values()[activation_mask].detach()
+            ),
+            size=(B, nodes.shape[1], nodes.shape[1])
+        )
+
+        # CAREFUL _values() detaches from autograd graph and breaks grads
+        self.stats["edges_per_node"] = (
+            adj._values().numel() / taus.sum().detach()
+        ).item()
+        self.stats["edge_density"] = adj._values().numel() / edge_idx[0].numel()
+        self.stats["logits_mean"] = logits.detach().mean().item()
+        self.stats["logits_var"] = logits.detach().var().item()
+        self.stats["temperature"] = self.tau_param.detach().item()
         return adj
