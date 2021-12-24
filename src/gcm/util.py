@@ -129,6 +129,47 @@ def sparse_gumbel_softmax(
         device=logits.device
     )
 
+def sparse_tempered_softmax(
+    logits: torch.sparse_coo, 
+    dim: int,
+    tau: float=1, 
+    hard: bool=False,
+    ) -> torch.sparse_coo:
+    # TODO remove coalesce when bug is fixed
+    logits = logits.coalesce()
+    sm_val = logits.values() / tau
+    sm_in = torch.sparse_coo_tensor(
+        indices=logits.indices(),
+        values=sm_val,
+        size=logits.shape
+    )
+    # TODO remove coalesce when bug is fixed
+    y_soft = torch.sparse.softmax(sm_in, dim=dim).coalesce()
+
+    if not hard:
+        return y_soft
+
+    index = []
+    # Want to max across dim, so exclude it during scatter
+    scat_dims = list(range(dim)) + list(range(dim+1, logits._indices().shape[0]))
+    scat_idx = y_soft._indices()[scat_dims]
+    flat_scat_idx, offsets = flatten_idx_n_dim(scat_idx)
+    maxes, argmax = scatter_max(y_soft._values(), flat_scat_idx)
+    # TODO: Sometimes argmax will give us out of bound indices 
+    # because dim_size < numel
+    # we would use the dim_size arg to scatter, but it crashes :(
+    # so instead just mask out invalid entries
+    argmax_mask = argmax < y_soft._indices().shape[-1] 
+    maxes = maxes[argmax_mask]
+    argmax = argmax[argmax_mask]
+    index = y_soft._indices()[:, argmax]
+
+    return torch.sparse_coo_tensor(
+        indices=index,
+        values=maxes,
+        size=logits.shape,
+        device=logits.device
+    )
 
 
 
