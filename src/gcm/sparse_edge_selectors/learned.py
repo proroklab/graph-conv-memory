@@ -39,12 +39,15 @@ class LearnedEdge(torch.nn.Module):
         # If learning the softmax temp,
         # the lower and upper bounds for the temperature
         # variable. Note that softmax is undefined for temp <= 0
-        temp_bounds: Tuple[float, float] = (0.001, 5)
+        temp_bounds: Tuple[float, float] = (0.001, 5),
+        # Whether or not to store gradients for logging
+        store_grads: bool = True,
     ):
         super().__init__()
         assert model or input_size, "Must specify either input_size or model"
         self.deterministic = deterministic
         self.num_edge_samples = num_edge_samples
+        self.store_grads = store_grads
         # This MUST be done here
         # if initialized in forward model does not learn...
         self.edge_network = self.build_edge_network(input_size) if model is None else model
@@ -63,6 +66,9 @@ class LearnedEdge(torch.nn.Module):
         if isinstance(m, torch.nn.Linear): 
             torch.nn.init.orthogonal_(m.weight)
 
+    def grad_hook(self, p_name, grad):
+        self.stats[f"gnorm_{p_name}"] = grad.norm().detach().item()
+
     def build_edge_network(self, input_size: int) -> torch.nn.Sequential:
         """Builds a network to predict edges.
         Network input: (i || j)
@@ -78,7 +84,10 @@ class LearnedEdge(torch.nn.Module):
             torch.nn.Linear(input_size, 1),
         )
         m.apply(self.init_weights)
-        return torch.jit.script(m)
+        if self.store_grads:
+            for n, p in m.named_parameters():
+                p.register_hook(functools.partial(self.grad_hook, n))
+        return m
 
     @typechecked
     def forward(
