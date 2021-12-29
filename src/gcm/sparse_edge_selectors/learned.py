@@ -75,10 +75,6 @@ class LearnedEdge(torch.nn.Module):
         m = torch.nn.Sequential(
             torch.nn.Linear(2 * input_size, input_size),
             torch.nn.ReLU(),
-            torch.nn.LayerNorm(input_size),
-            torch.nn.Linear(input_size, input_size),
-            torch.nn.ReLU(),
-            torch.nn.LayerNorm(input_size),
             torch.nn.Linear(input_size, 1),
         )
         m.apply(self.init_weights)
@@ -167,12 +163,11 @@ class LearnedEdge(torch.nn.Module):
             )
 
         activation_mask = soft.values() > cutoff
+        activations = soft.values()[activation_mask]
+        hard = 1 - activations.detach() + activations
         adj = torch.sparse_coo_tensor(
             indices=soft.indices()[:,activation_mask],
-            values=(
-                soft.values()[activation_mask] 
-                / soft.values()[activation_mask].detach()
-            ),
+            values=hard,
             size=(B, nodes.shape[1], nodes.shape[1])
         )
 
