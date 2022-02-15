@@ -85,11 +85,16 @@ class LearnedEdge(torch.nn.Module):
         if self.deterministic:
             edges = self.sm(shaped_logits)
         else:
+            cutoff = 1 / (1 + self.num_edge_samples)
+            soft = torch.nn.functional.gumbel_softmax(shaped_logits)
+            edges = self.ste(soft - cutoff)
             # Multinomial straight-thru estimator
+            """
             gs_in = shaped_logits.unsqueeze(0).repeat(self.num_edge_samples, 1, 1)
             # int_edges in Z but we need in [0,1] -- straight thru estimator
             soft = torch.nn.functional.gumbel_softmax(gs_in, hard=True)
             edges = self.ste(soft.sum(dim=0))
+            """
 
         new_adj = adj.clone()
         # Reindexing edges in this manner ensures even if the edge network
