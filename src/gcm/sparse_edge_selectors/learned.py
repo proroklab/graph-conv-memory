@@ -39,9 +39,7 @@ class LearnedEdge(torch.nn.Module):
         # If learning the softmax temp,
         # the lower and upper bounds for the temperature
         # variable. Note that softmax is undefined for temp <= 0
-        # see https://iancovert.com/blog/concrete_temperature/
-        # for how we picked bounds
-        temp_bounds: Tuple[float, float] = (0.01, 10),
+        temp_bounds: Tuple[float, float] = (0.001, 5),
         # Whether or not to store gradients for logging
         store_grads: bool = True,
     ):
@@ -52,8 +50,7 @@ class LearnedEdge(torch.nn.Module):
         self.store_grads = store_grads
         # This MUST be done here
         # if initialized in forward model does not learn...
-        #self.edge_network = self.build_edge_network(input_size) if model is None else model
-        self.K, self.Q = self.build_edge_networks(input_size)
+        self.edge_network = self.build_edge_network(input_size) if model is None else model
         self.ste = util.StraightThroughEstimator()
         self.window = window
         self.log_stats = log_stats
@@ -70,16 +67,25 @@ class LearnedEdge(torch.nn.Module):
     def grad_hook(self, p_name, grad):
         self.stats[f"gnorm_{p_name}"] = grad.norm().detach().item()
 
-    def build_edge_networks(self, input_size: int) -> torch.nn.Sequential:
+    def build_edge_network(self, input_size: int) -> torch.nn.Sequential:
         """Builds a network to predict edges.
         Network input: (i || j)
         Network output: logits(edge(i,j))
         """
-        k = torch.nn.Linear(input_size, input_size)
-        q = torch.nn.Linear(input_size, input_size)
-        k.apply(self.init_weights)
-        q.apply(self.init_weights)
-        return k, q
+        m = torch.nn.Sequential(
+            torch.nn.Linear(2 * input_size, input_size),
+            torch.nn.ReLU(),
+            torch.nn.LayerNorm(input_size),
+            torch.nn.Linear(input_size, input_size),
+            torch.nn.ReLU(),
+            torch.nn.LayerNorm(input_size),
+            torch.nn.Linear(input_size, 1),
+        )
+        m.apply(self.init_weights)
+        if self.store_grads:
+            for n, p in m.named_parameters():
+                p.register_hook(functools.partial(self.grad_hook, n))
+        return m
 
     @typechecked
     def forward(
@@ -139,12 +145,9 @@ class LearnedEdge(torch.nn.Module):
         # Feed node pairs to network
         sink_nodes = nodes[batch_idx, sink_idx]
         source_nodes = nodes[batch_idx, source_idx]
-        q = self.Q(source_nodes)
-        k = self.K(sink_nodes)
-        logits = (q * k).sum(dim=1)
-        #network_input = torch.cat((sink_nodes, source_nodes), dim=-1)
+        network_input = torch.cat((sink_nodes, source_nodes), dim=-1)
         # Logits is of shape [N]
-        #logits = self.edge_network(network_input).squeeze()
+        logits = self.edge_network(network_input).squeeze()
         # TODO rather than sparse to dense conversion, implement
         # a sparse gumbel softmax
         cutoff = 1 / (1 + self.num_edge_samples)
@@ -164,11 +167,12 @@ class LearnedEdge(torch.nn.Module):
             )
 
         activation_mask = soft.values() > cutoff
-        activations = soft.values()[activation_mask]
-        hard = 1 - activations.detach() + activations
         adj = torch.sparse_coo_tensor(
             indices=soft.indices()[:,activation_mask],
-            values=hard,
+            values=(
+                soft.values()[activation_mask] 
+                / soft.values()[activation_mask].detach()
+            ),
             size=(B, nodes.shape[1], nodes.shape[1])
         )
 
