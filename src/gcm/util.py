@@ -239,6 +239,50 @@ def get_batch_offsets(T: torch.Tensor):
 
     return batch_starts, batch_ends
 
+def get_causal_edges_one_batch(t, tau, window=None):
+    """A (potentially) more memory-efficient version of
+    get_causal_idxs that operates on a single batch. This can
+    be called in a for loop to reduce memory usage."""
+    tril_input = t + tau
+    edge = torch.tril_indices(
+        t + tau, t + tau, offset=-1, 
+        dtype=torch.long,
+        device=t.device,
+    )
+    # Use windows to reduce size, in case the graph is too big.
+    # Remove indices outside of the window
+    if window is not None:
+        window_min_idx = max(0, t - window)
+        window_mask = edge[1] >= window_min_idx
+        # Remove edges outside of window
+        edge = edge[:, window_mask]
+
+    # Filter edges -- we only want incoming edges to tau nodes
+    # we should have no sinks < T
+    edge = edge[:, edge[0] >= t]
+    return edge
+
+    batch = b * torch.ones(1, device=t.device, dtype=torch.long)
+    batch = batch.expand(edge[-1].shape[-1])
+    
+    return torch.cat((batch.unsqueeze(0), edge), dim=0)
+
+def get_causal_edges(T, taus, window=None):
+    """Given T and taus, select all the causal indices. In other words,
+    return all edges going from past to future (not future to past)"""
+    edge_idx = []
+    #tril_inputs = T + taus
+    B = T.numel()
+    for b in range(B):
+        edge = get_causal_edges_one_batch(T[b], taus[b], window=window)
+        batch = b * torch.ones(1, device=T.device, dtype=torch.long)
+        batch = batch.expand(edge[-1].shape[-1])
+        edge_idx.append(torch.cat((batch.unsqueeze(0), edge), dim=0))
+    edge_idx = torch.cat(edge_idx, dim=-1)
+    return edge_idx
+
+
+
 
 def flatten_adj(adj, T, taus, B):
     """Flatten a torch.coo_sparse [B, MAX_NODES, MAX_NODES] to [2, NE] and

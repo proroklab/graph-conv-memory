@@ -111,36 +111,9 @@ class LearnedEdge(torch.nn.Module):
         #
         # Construct indices denoting all edges, which we sample from
         # Note that we only want to sample incoming edges from nodes T to T + tau
-        edge_idx = []
-        tril_inputs = T + taus
-        for b in range(B):
-            edge = torch.tril_indices(
-                tril_inputs[b], tril_inputs[b], offset=-1, 
-                dtype=torch.long,
-                device=nodes.device,
-            )
-            # Use windows to reduce size, in case the graph is too big.
-            # Remove indices outside of the window
-            if self.window is not None:
-                window_min_idx = max(0, T[b] - self.window)
-                window_mask = edge[1] >= window_min_idx
-                # Remove edges outside of window
-                edge = edge[:, window_mask]
-
-            # Filter edges -- we only want incoming edges to tau nodes
-            # we should have no sinks < T
-            edge = edge[:, edge[0] >= T[b]]
-
-
-            batch = b * torch.ones(1, device=nodes.device, dtype=torch.long)
-            batch = batch.expand(edge[-1].shape[-1])
-            
-            edge_idx.append(torch.cat((batch.unsqueeze(0), edge), dim=0))
-
-
-        # Shape [3, N] denoting batch, sink, source
         # these indices denote nodes pairs being fed to network
-        edge_idx = torch.cat(edge_idx, dim=-1)
+        edge_idx = util.get_causal_edges(T, taus, self.window)
+
         batch_idx, sink_idx, source_idx = edge_idx.unbind()
         # Feed node pairs to network
         sink_nodes = nodes[batch_idx, sink_idx]
