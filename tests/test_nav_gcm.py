@@ -41,6 +41,9 @@ class TestComputeIdx(unittest.TestCase):
         self.assertTrue(torch.all(self.gcm.out_idx[0] == b_out_idx))
         self.assertTrue(torch.all(self.gcm.out_idx[1] == t_out_idx))
 
+        back_ptr = torch.tensor([2, 7])
+        self.assertTrue(torch.all(self.gcm.back_ptr == back_ptr))
+
 class TestUpdate(unittest.TestCase):
     def setUp(self):
         self.gcm = NavGCM(gnn=IdentGNN(), causal=True)
