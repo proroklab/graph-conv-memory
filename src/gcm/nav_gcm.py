@@ -15,20 +15,25 @@ class NavGCM(torch.nn.Module):
     def __init__(
         self, 
         gnn,
+        pool=False,
         max_verts=128,
-        edge_method="knn",
-        k=10,
+        edge_method="radius",
+        k=16,
         r=1.0,
         causal=True,
+        disjoint_edges=False,
     ):
         super().__init__()
         self.k = k
         self.r = r
         self.gnn = gnn
         self.max_verts = max_verts
+        self.pool = pool
         assert edge_method in ["knn", "radius"]
+        assert edge_method != "knn", "KNN does not train/infer correctly"
         self.edge_method = edge_method
         self.causal = causal
+        self.disjoint_edges = disjoint_edges
 
     def make_idx(self, T, taus):
         """Returns batch and time idxs marking
@@ -140,10 +145,10 @@ class NavGCM(torch.nn.Module):
         # Compute idxs once for efficiency
         # Nearly all idxs are pairs of [batch, time] indices
         # Idx pointing to non-padded elements
-        # Shape: [sum(B[i]*T[i])]
+        # Shape: [sum(B[i]*T[i])] * 2
         self.idx = self.make_idx(T, taus)
         # Idx pointing to new elements in the x, pos, vert mats
-        # Shape: [sum(taus[i])]
+        # Shape: [sum(taus[i])] * 2
         self.new_idx = self.make_new_idx(T, taus)
         # Idx pointing to new elements in the flattened gnn output
         # Shape: [sum(taus[i])], note there is only one idx here
@@ -154,6 +159,13 @@ class NavGCM(torch.nn.Module):
         # Pointer to the last node in each graph
         # Shape: [B]
         self.back_ptr = (T + taus).cumsum(0) - 1
+        # Pointer to the zeroth node in each graph
+        # Shape: [B]
+        self.front_ptr = torch.cat(
+            [torch.tensor([0], device=T.device), self.back_ptr[:-1] + 1]
+        )
+        #self.front_ptr = self.back_ptr.roll(1)
+        #self.front_ptr[0] = 0
 
     def causal_forward(self, x, pos, rot, T, taus, out_batch, out_time):
         """Causal forward restricts edges to being fully-causal. This means
@@ -170,13 +182,14 @@ class NavGCM(torch.nn.Module):
             edges = self.knn_edges(x, pos, rot)
         else:
             edges = self.radius_edges(x, pos, rot)
+        # TODO: This changes eval -- we can rewire old things to be noncausal
+        #if self.training:
         edges = self.remove_noncausal_edges(edges, T, taus)
-
         # [B, T] ordering is [0, 0], [0, 1], ... [0, t], [1, 0]
         # TODO: Pooling can be done in output using new_idx
         # as well as max_hops graph reduction and sampling 
         output = self.gnn(
-            x, edges, pos, rot, self.idx[0]#, self.flat_new_idx, self.back_ptr
+            x, edges, pos, rot, self.idx[0], self.front_ptr, self.back_ptr, self.flat_new_idx
         )
 
         # Compute padded output at the inputted vert idxs
@@ -253,42 +266,3 @@ class NavGCM(torch.nn.Module):
         padded_output[self.out_idx] = output[self.flat_new_idx]
 
         return padded_output, state
-
-
-        """
-        old_x, old_pos, old_rot, T = state
-        out_batch, out_time = x.shape[0], taus.max()
-        self.compute_idx(T, taus)
-
-        # Add new inputs to recurrent states
-        x, pos, rot = self.update(x, pos, rot, old_x, old_pos, old_rot, T, taus)
-        state = [x, pos, rot, T + taus]
-
-        # Remove padding and flatten
-        # Unpadded shapes are [B*(T+taus), *]
-        x = x[self.idx]
-        pos = pos[self.idx]
-        rot = rot[self.idx]
-
-        if self.edge_method == "knn":
-            edges = self.knn_edges(x, pos, rot)
-        else:
-            edges = self.radius_edges(x, pos, rot)
-        edges = self.remove_noncausal_edges(edges, T, taus)
-
-        # [B, T] ordering is [0, 0], [0, 1], ... [0, t], [1, 0]
-        # TODO: Pooling can be done in output using new_idx
-        # as well as max_hops graph reduction and sampling 
-        output = self.gnn(
-            x, edges, rot, pos, self.idx[0], self.flat_new_idx, self.back_ptr
-        )
-
-        # Compute padded output at the inputted vert idxs
-        padded_output = torch.zeros(
-            (out_batch, out_time, output.shape[-1]), device=x.device
-        )
-        # Offset from 0 instead of T 
-        padded_output[self.out_idx] = output[self.flat_new_idx]
-
-        return padded_output, state
-        """
