@@ -192,14 +192,9 @@ class NavGCM(torch.nn.Module):
             x, edges, pos, rot, self.idx[0], self.front_ptr, self.back_ptr, self.flat_new_idx
         )
 
-        # Compute padded output at the inputted vert idxs
-        #padded_output = torch.zeros(
-        #    (out_batch, out_time, output.shape[-1]), device=x.device
-        #)
+        # return output
         # Offset from 0 instead of T 
-        #padded_output[self.out_idx] = output[self.flat_new_idx]
-
-        return output
+        return output[self.flat_new_idx]
 
     def full_forward(self, x, pos, rot, T, taus, out_batch, out_time):
         """Unlike causal_forward, full_forward allows graph rewiring for
@@ -254,9 +249,9 @@ class NavGCM(torch.nn.Module):
         x, pos, rot = self.update(x, pos, rot, old_x, old_pos, old_rot, T, taus)
         state = [x, pos, rot, T + taus]
         if self.causal:
-            output = self.causal_forward(x, pos, rot, T, taus, out_batch, out_time)
+            output_at_target = self.causal_forward(x, pos, rot, T, taus, out_batch, out_time)
         else:
-            output = self.full_forward(x, pos, rot, T, taus, out_batch, out_time)
+            output_at_target = self.full_forward(x, pos, rot, T, taus, out_batch, out_time)
 
         # Compute padded output at the inputted vert idxs
         padded_output = torch.zeros(
